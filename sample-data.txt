@@ -1,0 +1,16 @@
+SIRO123456
+ABC,DEF,GHI
+12345|67890|ABCDE
+ValidRecord
+InvalidRec
+SIRO987654
+123,456
+789|012|345
+ShortRec
+SIRO555666
+AnotherValidRecord
+X
+SIRO777888
+CSV,Format,Test
+Pipe|Format|Test|Extra
+SIRO999000
