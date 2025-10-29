@@ -22,6 +22,7 @@ export interface DebtBaseFormData {
   secondaryMessage: string;
   screenMessage: string;
   receiptGeneration: 'AUTOMATIC' | 'MANUAL';
+  clientIdGeneration: 'MANUAL' | 'AUTOMATIC';
   period: string; // Format: MMAA
   conceptId: string; // 0-9
 }
@@ -46,20 +47,53 @@ export const initialFormData: DebtBaseFormData = {
   firstAmount: '',
   secondAmount: '',
   thirdAmount: '',
-  ticketMessage: '',
+  ticketMessage: 'PAGO DEUDA',
   secondaryMessage: '',
-  screenMessage: '',
+  screenMessage: 'PAGO DEUDA',
   receiptGeneration: 'AUTOMATIC',
+  clientIdGeneration: 'MANUAL',
   period: new Date().toLocaleDateString('es-AR', { month: '2-digit', year: '2-digit' }).replace('/', ''),
   conceptId: '0'
 };
 
-// Helper function to format receipt number
-export const formatReceiptNumber = (base: string, conceptId: string, period: string, format: 'FULL' | 'BASIC' = 'FULL'): string => {
+/**
+ * Formats a receipt number based on the specified parameters
+ * @param base The base string (not used in FULL format)
+ * @param conceptId The concept ID (0-9)
+ * @param period The period in MMAA format (e.g., '1025' for October 2025)
+ * @param format The format of the receipt number ('FULL' or 'BASIC')
+ * @param occurrence Optional occurrence number for duplicate client IDs (0-9)
+ * @returns Formatted receipt number
+ */
+export const formatReceiptNumber = (
+  base: string, 
+  conceptId: string, 
+  period: string, 
+  format: 'FULL' | 'BASIC' = 'FULL',
+  occurrence: number = 0
+): string => {
   if (format === 'BASIC') {
     return `${conceptId}${period}`.padEnd(5, '0').substring(0, 5);
   }
-  return `${base.padEnd(15, ' ').substring(0, 15)}${conceptId}${period}`.padEnd(20, '0');
+  
+  // For FULL format:
+  // - First 15 chars: Fixed prefix 'IDFACTURABASE00'
+  // - 16th char: 0 for unique client ID, or 1-9 for duplicates
+  // - Last 4 chars: Period in MMAA format
+  const fixedPrefix = 'IDFACTURABASE00';
+  const currentDate = new Date();
+  const currentPeriod = 
+    String(currentDate.getMonth() + 1).padStart(2, '0') + // MM
+    String(currentDate.getFullYear()).slice(-2); // AA
+  
+  // If period is provided, use it; otherwise use current period
+  const receiptPeriod = period || currentPeriod;
+  
+  // For the 16th character, use the occurrence number (0-9)
+  // If occurrence is 0, it means it's a unique client ID
+  const occurrenceDigit = Math.min(occurrence, 9).toString();
+  
+  return `${fixedPrefix}${occurrenceDigit}${receiptPeriod}`.padEnd(20, '0');
 };
 
 // Validation functions
@@ -72,9 +106,42 @@ export const validateClientId = (id: string): boolean => {
   return /^\d{9}$/.test(id);
 };
 
-export const validateReceiptNumber = (number: string, format: 'FULL' | 'BASIC'): boolean => {
+/**
+ * Validates a receipt number based on the format and client ID uniqueness
+ * @param number The receipt number to validate
+ * @param format The format of the receipt number ('FULL' or 'BASIC')
+ * @param clientId The client ID for validation (optional, used for FULL format)
+ * @param conventionClients Array of client IDs in the same convention (optional, used for FULL format)
+ * @returns boolean indicating if the receipt number is valid
+ */
+export const validateReceiptNumber = (
+  number: string, 
+  format: 'FULL' | 'BASIC',
+  clientId?: string,
+  conventionClients: string[] = []
+): boolean => {
   if (format === 'BASIC') {
     return /^\d{5}$/.test(number);
   }
-  return /^[A-Z0-9\s]{15}\d{5}$/.test(number);
+  
+  // For FULL format, check the basic structure first
+  if (!/^[A-Z0-9\s]{15}\d{5}$/.test(number)) {
+    return false;
+  }
+  
+  // If client ID and convention clients are provided, validate the 16th digit
+  if (clientId && conventionClients.length > 0) {
+    const isClientIdUnique = conventionClients.filter(id => id === clientId).length === 1;
+    const sixteenthDigit = number.charAt(15);
+    
+    if (isClientIdUnique) {
+      // For unique client IDs, 16th digit must be '0'
+      return sixteenthDigit === '0';
+    } else {
+      // For duplicate client IDs, 16th digit must be between 0-9
+      return /^[0-9]$/.test(sixteenthDigit);
+    }
+  }
+  
+  return true;
 };

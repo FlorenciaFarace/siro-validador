@@ -23,9 +23,102 @@ export default function DebtBaseGeneratorTab() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [debtBaseContent, setDebtBaseContent] = useState<string>('');
   const [activeConventionIndex, setActiveConventionIndex] = useState<number>(0);
+  const [isFormReady, setIsFormReady] = useState<boolean>(false);
 
   const today = format(new Date(), 'yyyy-MM-dd');
   
+  // Check if form is ready for generation (has client IDs and generation type selected)
+  useEffect(() => {
+    const hasClientIds = formData.conventions.every(convention => 
+      convention.clients.every(client => client.id.length === 9)
+    );
+    
+    setIsFormReady(
+      hasClientIds && 
+      formData.receiptGeneration === 'AUTOMATIC' && 
+      formData.conceptId.length === 1
+    );
+  }, [formData.conventions, formData.receiptGeneration, formData.conceptId]);
+
+  // Generate random 9-digit client ID
+  const generateRandomClientId = (): string => {
+    return Math.floor(100000000 + Math.random() * 900000000).toString();
+  };
+
+  // Generate client IDs for all clients
+  const generateClientIds = () => {
+    const newConventions = [...formData.conventions];
+    
+    newConventions.forEach(convention => {
+      convention.clients.forEach(client => {
+        if (!client.id) {
+          client.id = generateRandomClientId();
+        }
+      });
+    });
+    
+    setFormData(prev => ({
+      ...prev,
+      conventions: newConventions
+    }));
+  };
+
+  // Generate receipt numbers for all clients
+  const generateReceipts = () => {
+    const newConventions = [...formData.conventions];
+    
+    newConventions.forEach(convention => {
+      // First pass: group clients by ID to track occurrences
+      const clientGroups = new Map<string, number>();
+      
+      // Count how many times each client ID appears
+      convention.clients.forEach(client => {
+        clientGroups.set(client.id, (clientGroups.get(client.id) || 0) + 1);
+      });
+      
+      // Track the current occurrence for each client ID
+      const clientOccurrences = new Map<string, number>();
+      // Track sequential numbers for clients with more than 9 duplicates
+      const sequentialNumbers = new Map<string, number>();
+      
+      // Generate receipt numbers
+      convention.clients.forEach(client => {
+        const clientId = client.id;
+        const totalOccurrences = clientGroups.get(clientId) || 0;
+        const currentOccurrence = clientOccurrences.get(clientId) || 0;
+        
+        let receiptNumber: string;
+        
+        if (totalOccurrences <= 9) {
+          // For 9 or fewer duplicates, use the standard format with 16th digit
+          receiptNumber = formatReceiptNumber(
+            'IDFACTURABASE00',
+            formData.conceptId,
+            formData.period,
+            formData.format,
+            currentOccurrence // 0 for first, 1-8 for duplicates
+          );
+        } else {
+          // For more than 9 duplicates, use sequential 5-digit number starting from 00001
+          const seqNumber = (sequentialNumbers.get(clientId) || 0) + 1;
+          sequentialNumbers.set(clientId, seqNumber);
+          
+          // Format as 5-digit number, padded with leading zeros
+          const seqString = seqNumber.toString().padStart(5, '0');
+          receiptNumber = `IDFACTURABASE00${seqString}`.padEnd(20, '0');
+        }
+        
+        client.receiptNumber = receiptNumber;
+        clientOccurrences.set(clientId, currentOccurrence + 1);
+      });
+    });
+    
+    setFormData(prev => ({
+      ...prev,
+      conventions: newConventions
+    }));
+  };
+
   // Update clients when record count changes
   useEffect(() => {
     const updatedConventions = [...formData.conventions];
@@ -75,10 +168,16 @@ export default function DebtBaseGeneratorTab() {
         }
         
         if (formData.receiptGeneration === 'MANUAL' && client.receiptNumber) {
-          if (!validateReceiptNumber(client.receiptNumber, formData.format)) {
+          const clientIds = formData.conventions[index].clients.map((client: { id: string }) => client.id);
+          if (!validateReceiptNumber(
+            client.receiptNumber, 
+            formData.format,
+            client.id,
+            clientIds
+          )) {
             newErrors[`client-${index}-${clientIndex}-receipt`] = 
               formData.format === 'FULL' 
-                ? 'Número de comprobante inválido (15 caracteres alfanuméricos + 5 dígitos)'
+                ? 'Número de comprobante inválido. Debe tener 20 caracteres (15 alfanuméricos + 5 dígitos). El 16to dígito debe ser 0 para IDs únicos, o 0-9 para duplicados.'
                 : 'Número de comprobante inválido (5 dígitos)';
           }
         }
@@ -203,10 +302,16 @@ export default function DebtBaseGeneratorTab() {
         let receiptNum = '';
         
         if (formData.receiptGeneration === 'AUTOMATIC') {
-          // Generate automatic receipt number
+          // Check if this client ID appears more than once in the same convention
+          const clientIdCount = convention.clients.filter(c => c.id === client.id).length;
+          
+          // If client ID is unique in this convention, use '0' as concept ID, otherwise use the provided one
+          const effectiveConceptId = clientIdCount > 1 ? formData.conceptId : '0';
+          
+          // Generate automatic receipt number with the effective concept ID
           receiptNum = formatReceiptNumber(
-            'BASE DEUDA FULL',
-            formData.conceptId,
+            'IDFACTURABASE00',
+            effectiveConceptId,
             formData.period,
             formData.format
           );
@@ -601,30 +706,85 @@ export default function DebtBaseGeneratorTab() {
           </div>
         </div>
 
+        {/* Client ID Generation */}
+        <div className="mb-6 p-4 border rounded-lg">
+          <h3 className="text-lg font-medium text-gray-900 mb-3">Generación de Id clientes</h3>
+          <div className="flex items-center justify-between">
+            <div className="flex space-x-6">
+              <label className="flex items-center space-x-2">
+                <input
+                  type="radio"
+                  name="clientIdGeneration"
+                  className="form-radio h-5 w-5 text-[var(--siro-green)]"
+                  checked={formData.clientIdGeneration === 'MANUAL'}
+                  onChange={() => updateField('clientIdGeneration', 'MANUAL')}
+                />
+                <span>Ingreso manual</span>
+              </label>
+              <label className="flex items-center space-x-2">
+                <input
+                  type="radio"
+                  name="clientIdGeneration"
+                  className="form-radio h-5 w-5 text-[var(--siro-green)]"
+                  checked={formData.clientIdGeneration === 'AUTOMATIC'}
+                  onChange={() => updateField('clientIdGeneration', 'AUTOMATIC')}
+                />
+                <span>Generación automática</span>
+              </label>
+            </div>
+            <button
+              type="button"
+              onClick={generateClientIds}
+              disabled={formData.clientIdGeneration !== 'AUTOMATIC'}
+              className={`px-4 py-2 rounded-md text-white text-sm font-medium ${
+                formData.clientIdGeneration === 'AUTOMATIC'
+                  ? 'bg-[var(--siro-green)] hover:bg-[#055a2e] cursor-pointer'
+                  : 'bg-gray-300 cursor-not-allowed'
+              }`}
+            >
+              Generar IDs
+            </button>
+          </div>
+        </div>
+
         {/* Receipt Generation Options */}
         <div className="mb-6 p-4 border rounded-lg">
           <h3 className="text-lg font-medium text-gray-900 mb-3">Generación de comprobantes</h3>
-          <div className="space-y-3">
-            <label className="flex items-center space-x-2">
-              <input
-                type="radio"
-                name="receiptGeneration"
-                className="form-radio text-[var(--siro-green)]"
-                checked={formData.receiptGeneration === 'MANUAL'}
-                onChange={() => updateField('receiptGeneration', 'MANUAL')}
-              />
-              <span>Ingreso Manual</span>
-            </label>
-            <label className="flex items-center space-x-2">
-              <input
-                type="radio"
-                name="receiptGeneration"
-                className="form-radio text-[var(--siro-green)]"
-                checked={formData.receiptGeneration === 'AUTOMATIC'}
-                onChange={() => updateField('receiptGeneration', 'AUTOMATIC')}
-              />
-              <span>Generación Automática</span>
-            </label>
+          <div className="flex items-center justify-between">
+            <div className="flex space-x-6">
+              <label className="flex items-center space-x-2">
+                <input
+                  type="radio"
+                  name="receiptGeneration"
+                  className="form-radio h-5 w-5 text-[var(--siro-green)]"
+                  checked={formData.receiptGeneration === 'MANUAL'}
+                  onChange={() => updateField('receiptGeneration', 'MANUAL')}
+                />
+                <span>Ingreso manual</span>
+              </label>
+              <label className="flex items-center space-x-2">
+                <input
+                  type="radio"
+                  name="receiptGeneration"
+                  className="form-radio h-5 w-5 text-[var(--siro-green)]"
+                  checked={formData.receiptGeneration === 'AUTOMATIC'}
+                  onChange={() => updateField('receiptGeneration', 'AUTOMATIC')}
+                />
+                <span>Generación automática</span>
+              </label>
+            </div>
+            <button
+              type="button"
+              onClick={generateReceipts}
+              disabled={!isFormReady}
+              className={`px-4 py-2 rounded-md text-white text-sm font-medium ${
+                isFormReady
+                  ? 'bg-[var(--siro-green)] hover:bg-[#055a2e] cursor-pointer'
+                  : 'bg-gray-300 cursor-not-allowed'
+              }`}
+            >
+              Generar
+            </button>
           </div>
         </div>
 
@@ -680,13 +840,8 @@ export default function DebtBaseGeneratorTab() {
                             Comprobante
                           </label>
                           {formData.receiptGeneration === 'AUTOMATIC' ? (
-                            <div className="px-3 py-2 bg-gray-100 rounded-md border border-gray-300">
-                              {formatReceiptNumber(
-                                '', // Base can be empty for automatic generation
-                                formData.conceptId,
-                                formData.period,
-                                formData.format
-                              )}
+                            <div className="px-3 py-2 bg-gray-100 rounded-md border border-gray-300 min-h-[42px]">
+                              {convention.clients[clientIndex]?.receiptNumber || ''}
                             </div>
                           ) : (
                             <>
@@ -735,6 +890,27 @@ export default function DebtBaseGeneratorTab() {
                 </div>
               </div>
             ))}
+            
+            {/* Generate Receipts Button */}
+            <div className="mt-6">
+              <button
+                type="button"
+                onClick={generateReceipts}
+                disabled={!isFormReady}
+                className={`px-6 py-2 rounded-md text-white text-base font-medium ${
+                  isFormReady 
+                    ? 'bg-[var(--siro-green)] hover:bg-[#055a2e]' 
+                    : 'bg-gray-400 cursor-not-allowed'
+                }`}
+              >
+                Generar Comprobantes
+              </button>
+              {!isFormReady && formData.receiptGeneration === 'AUTOMATIC' && (
+                <p className="mt-2 text-sm text-gray-500">
+                  Complete todos los IDs de cliente para habilitar la generación
+                </p>
+              )}
+            </div>
           </div>
         </div>
 
