@@ -68,48 +68,37 @@ export default function DebtBaseGeneratorTab() {
     const newConventions = [...formData.conventions];
     
     newConventions.forEach(convention => {
-      // First pass: group clients by ID to track occurrences
-      const clientGroups = new Map<string, number>();
+      // Track occurrences of each client ID within this convention
+      const clientIdCounts: Record<string, number> = {};
       
-      // Count how many times each client ID appears
       convention.clients.forEach(client => {
-        clientGroups.set(client.id, (clientGroups.get(client.id) || 0) + 1);
-      });
-      
-      // Track the current occurrence for each client ID
-      const clientOccurrences = new Map<string, number>();
-      // Track sequential numbers for clients with more than 9 duplicates
-      const sequentialNumbers = new Map<string, number>();
-      
-      // Generate receipt numbers
-      convention.clients.forEach(client => {
-        const clientId = client.id;
-        const totalOccurrences = clientGroups.get(clientId) || 0;
-        const currentOccurrence = clientOccurrences.get(clientId) || 0;
-        
-        let receiptNumber: string;
-        
-        if (totalOccurrences <= 9) {
-          // For 9 or fewer duplicates, use the standard format with 16th digit
-          receiptNumber = formatReceiptNumber(
-            'IDFACTURABASE00',
-            formData.conceptId,
-            formData.period,
-            formData.format,
-            currentOccurrence // 0 for first, 1-8 for duplicates
-          );
-        } else {
-          // For more than 9 duplicates, use sequential 5-digit number starting from 00001
-          const seqNumber = (sequentialNumbers.get(clientId) || 0) + 1;
-          sequentialNumbers.set(clientId, seqNumber);
+        if (formData.receiptGeneration === 'AUTOMATIC' && client.id) {
+          // Count occurrences of this client ID to handle duplicates
+          const count = clientIdCounts[client.id] || 0;
+          clientIdCounts[client.id] = count + 1;
           
-          // Format as 5-digit number, padded with leading zeros
-          const seqString = seqNumber.toString().padStart(5, '0');
-          receiptNumber = `IDFACTURABASE00${seqString}`.padEnd(20, '0');
+          // For BASIC format, we need to pass the total number of clients in the convention
+          if (formData.format === 'FULL') {
+            // For FULL format, use the existing formatReceiptNumber
+            client.receiptNumber = formatReceiptNumber(
+              '', // Base not used in current implementation
+              formData.conceptId,
+              formData.period,
+              'FULL',
+              count // occurrence (0 for first, 1 for second, etc.)
+            );
+          } else {
+            // For BASIC format, pass the total number of clients in the convention
+            client.receiptNumber = formatReceiptNumber(
+              '',
+              formData.conceptId,
+              formData.period,
+              'BASIC',
+              count,
+              convention.clients.length // Pass the total number of clients in this convention
+            );
+          }
         }
-        
-        client.receiptNumber = receiptNumber;
-        clientOccurrences.set(clientId, currentOccurrence + 1);
       });
     });
     
@@ -169,16 +158,31 @@ export default function DebtBaseGeneratorTab() {
         
         if (formData.receiptGeneration === 'MANUAL' && client.receiptNumber) {
           const clientIds = formData.conventions[index].clients.map((client: { id: string }) => client.id);
-          if (!validateReceiptNumber(
+          const isValid = validateReceiptNumber(
             client.receiptNumber, 
             formData.format,
             client.id,
             clientIds
-          )) {
-            newErrors[`client-${index}-${clientIndex}-receipt`] = 
-              formData.format === 'FULL' 
-                ? 'Número de comprobante inválido. Debe tener 20 caracteres (15 alfanuméricos + 5 dígitos). El 16to dígito debe ser 0 para IDs únicos, o 0-9 para duplicados.'
-                : 'Número de comprobante inválido (5 dígitos)';
+          );
+          
+          if (!isValid) {
+            if (formData.format === 'FULL') {
+              const isDuplicate = clientIds.filter(id => id === client.id).length > 1;
+              if (client.receiptNumber.length !== 20) {
+                newErrors[`client-${index}-${clientIndex}-receipt`] = 'El número de comprobante debe tener 20 caracteres.';
+              } else if (isDuplicate && !/^[A-Z0-9\s]{15}[0-9]\d{4}$/.test(client.receiptNumber)) {
+                newErrors[`client-${index}-${clientIndex}-receipt`] = 'Para IDs duplicados, el 16to dígito debe ser entre 1-9.';
+              } else if (!isDuplicate && !/^[A-Z0-9\s]{15}0\d{4}$/.test(client.receiptNumber)) {
+                newErrors[`client-${index}-${clientIndex}-receipt`] = 'Para IDs únicos, el 16to dígito debe ser 0.';
+              } else {
+                newErrors[`client-${index}-${clientIndex}-receipt`] = 'Formato de comprobante inválido para el formato FULL.';
+              }
+            } else {
+              // BASIC format validation
+              if (!/^\d{5}$/.test(client.receiptNumber)) {
+                newErrors[`client-${index}-${clientIndex}-receipt`] = 'En formato BÁSICO, el número de comprobante debe tener exactamente 5 dígitos numéricos.';
+              }
+            }
           }
         }
       });
@@ -890,37 +894,71 @@ export default function DebtBaseGeneratorTab() {
                 </div>
               </div>
             ))}
-            
-            {/* Generate Receipts Button */}
-            <div className="mt-6">
-              <button
-                type="button"
-                onClick={generateReceipts}
-                disabled={!isFormReady}
-                className={`px-6 py-2 rounded-md text-white text-base font-medium ${
-                  isFormReady 
-                    ? 'bg-[var(--siro-green)] hover:bg-[#055a2e]' 
-                    : 'bg-gray-400 cursor-not-allowed'
-                }`}
-              >
-                Generar Comprobantes
-              </button>
-              {!isFormReady && formData.receiptGeneration === 'AUTOMATIC' && (
-                <p className="mt-2 text-sm text-gray-500">
-                  Complete todos los IDs de cliente para habilitar la generación
-                </p>
-              )}
-            </div>
           </div>
         </div>
 
-        <div className="flex justify-end">
+        <div className="flex justify-end mb-6">
           <button
             type="submit"
             className="px-4 py-2 bg-[var(--siro-green)] text-white rounded-md hover:bg-green-700 transition-colors"
           >
             Generar Base de Deuda
           </button>
+        </div>
+
+        {/* Preview Section */}
+        <div className="mb-6">
+          <h3 className="text-lg font-medium text-gray-700 mb-2">Previsualización</h3>
+          <div className="bg-white p-4 rounded-md border border-gray-300">
+            {debtBaseContent ? (
+              <div className="space-y-4">
+                <div className="font-mono text-sm bg-gray-50 p-3 rounded border border-gray-200 overflow-auto max-h-96">
+                  {formData.format === 'FULL' ? (
+                    <pre className="whitespace-pre">{debtBaseContent}</pre>
+                  ) : (
+                    <pre className="whitespace-pre">
+                      {debtBaseContent.split('\n').map((line, i) => (
+                        <div key={i} className="font-mono text-sm">
+                          {line}
+                        </div>
+                      ))}
+                    </pre>
+                  )}
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-500">
+                    {debtBaseContent.split('\n').length} registros generados
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (debtBaseContent) {
+                        const blob = new Blob([debtBaseContent], { type: 'text/plain' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `base_deuda_${formData.format.toLowerCase()}_${format(new Date(), 'yyyyMMdd_HHmmss')}.txt`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                      }
+                    }}
+                    className="px-4 py-2 bg-[var(--siro-green)] text-white rounded-md hover:bg-green-700 transition-colors flex items-center"
+                  >
+                    <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Descargar Base
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-gray-500 italic text-center py-8 bg-gray-50 rounded">
+                La previsualización de la base de deuda aparecerá aquí después de generarla
+              </div>
+            )}
+          </div>
         </div>
       </form>
     </div>

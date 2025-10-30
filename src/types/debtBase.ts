@@ -65,15 +65,63 @@ export const initialFormData: DebtBaseFormData = {
  * @param occurrence Optional occurrence number for duplicate client IDs (0-9)
  * @returns Formatted receipt number
  */
+// Store generated receipt numbers for each client ID
+const clientReceiptNumbers = new Map<string, string>();
+
+// Track the last used concept ID for each client ID and convention
+const clientConceptCounters = new Map<string, number>();
+
+// Track sequential numbers for clients with more than 10 duplicates
+const sequentialNumbers = new Map<string, number>();
+
+// Track client ID occurrences
+const clientIdCounts = new Map<string, number>();
+
 export const formatReceiptNumber = (
   base: string, 
   conceptId: string, 
   period: string, 
   format: 'FULL' | 'BASIC' = 'FULL',
-  occurrence: number = 0
+  occurrence: number = 0,
+  clientId?: string,
+  conventionId?: string
 ): string => {
-  if (format === 'BASIC') {
-    return `${conceptId}${period}`.padEnd(5, '0').substring(0, 5);
+  if (format === 'BASIC' && clientId && conventionId) {
+    // Create a unique key for this client+convention combination
+    const clientConventionKey = `${clientId}_${conventionId}`;
+    
+    // If we already have a receipt number for this client ID, return it
+    if (clientReceiptNumbers.has(clientConventionKey)) {
+      return clientReceiptNumbers.get(clientConventionKey)!;
+    }
+
+    // Count occurrences of this client ID in the current convention
+    const count = clientIdCounts.get(clientConventionKey) || 0;
+    clientIdCounts.set(clientConventionKey, count + 1);
+
+    let receiptNumber: string;
+    const formattedPeriod = period.padStart(4, '0').slice(-4); // Ensure 4 digits (MMAA)
+    
+    // Generate FULL format receipt number first
+    const fixedPrefix = 'IDFACTURABASE00';
+    const occurrenceDigit = Math.min(count, 9);
+    const fullFormatNumber = `${fixedPrefix}${occurrenceDigit}${formattedPeriod}`.padEnd(20, '0');
+    
+    // For BASIC format, use last 5 digits of the FULL format receipt number
+    if (count < 10) {
+      // First 10 duplicates: Use last 5 digits of FULL format
+      receiptNumber = fullFormatNumber.slice(-5);
+    } else {
+      // For more than 10 duplicates, use sequential numbering (00001, 00002, etc.)
+      const seqNum = (sequentialNumbers.get(conventionId) || 0) + 1;
+      sequentialNumbers.set(conventionId, seqNum);
+      receiptNumber = seqNum.toString().padStart(5, '0');
+    }
+    
+    // Store the generated receipt number for this client ID
+    clientReceiptNumbers.set(clientConventionKey, receiptNumber);
+    
+    return receiptNumber;
   }
   
   // For FULL format:
@@ -94,7 +142,7 @@ export const formatReceiptNumber = (
   const occurrenceDigit = Math.min(occurrence, 9).toString();
   
   return `${fixedPrefix}${occurrenceDigit}${receiptPeriod}`.padEnd(20, '0');
-};
+}
 
 // Validation functions
 export const validateAlphanumeric = (value: string, maxLength: number): boolean => {
