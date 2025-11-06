@@ -68,14 +68,8 @@ export const initialFormData: DebtBaseFormData = {
 // Store generated receipt numbers for each client ID
 const clientReceiptNumbers = new Map<string, string>();
 
-// Track the last used concept ID for each client ID and convention
-const clientConceptCounters = new Map<string, number>();
-
-// Track sequential numbers for clients with more than 10 duplicates
+// Track sequential numbers for clients with more than 10 duplicates (per client+convention)
 const sequentialNumbers = new Map<string, number>();
-
-// Track client ID occurrences
-const clientIdCounts = new Map<string, number>();
 
 export const formatReceiptNumber = (
   base: string, 
@@ -95,54 +89,27 @@ export const formatReceiptNumber = (
       return clientReceiptNumbers.get(clientConventionKey)!;
     }
 
-    // Count occurrences of this client ID in the current convention
-    const count = clientIdCounts.get(clientId) || 0; // Track by clientId only for counting duplicates
-    clientIdCounts.set(clientId, count + 1);
-
-    // For the first 10 occurrences, use the standard format
-    if (count < 10) {
-      // First generate the FULL format receipt number
+    // For BASIC, derive from FULL for consistency in first 10 occurrences
+    if (occurrence < 10) {
       const fullFormatNumber = formatReceiptNumber(
         'IDFACTURABASE00',
         conceptId,
         period,
         'FULL',
-        count,
+        occurrence,
         clientId,
         conventionId
       );
-      
-      // For BASIC format, use last 5 digits of the FULL format receipt number
       const receiptNumber = fullFormatNumber.slice(-5);
-      
-      // Store the generated receipt number for this client ID + convention
       clientReceiptNumbers.set(clientConventionKey, receiptNumber);
-      
       return receiptNumber;
     } else {
-      // For more than 10 duplicates, use sequential numbers starting from 00001
-      
-      // Check if we already have a sequential number for this client ID (across all conventions)
-      let seqNum = sequentialNumbers.get(clientId);
-      
-      if (seqNum === undefined) {
-        // This is the first time this client ID has exceeded 10 occurrences
-        // Get the current maximum sequential number and add 1
-        const maxSeqNum = Array.from(sequentialNumbers.entries())
-          .filter(([key]) => key.startsWith('seq_'))
-          .reduce((max, [_, num]) => Math.max(max, num as number), 0);
-        
-        seqNum = maxSeqNum + 1;
-        // Store the sequential number with a prefix to avoid conflicts
-        sequentialNumbers.set(`seq_${clientId}`, seqNum);
-      }
-      
-      // Format the sequential number as 5 digits (00001, 00002, etc.)
-      const receiptNumber = seqNum.toString().padStart(5, '0');
-      
-      // Store the generated receipt number for this client ID + convention
+      // After 10 duplicates, use sequential numbers starting from 00001
+      const seqKey = `basic_${clientConventionKey}`;
+      const current = sequentialNumbers.get(seqKey) || 1;
+      const receiptNumber = current.toString().padStart(5, '0');
+      sequentialNumbers.set(seqKey, current + 1);
       clientReceiptNumbers.set(clientConventionKey, receiptNumber);
-      
       return receiptNumber;
     }
   }
@@ -154,24 +121,16 @@ export const formatReceiptNumber = (
   
   const fixedPrefix = 'IDFACTURABASE00';
   
-  // Check if this is a client ID that appears more than 10 times in this convention
+  // FULL format with client/convention context: switch to sequential after 10th duplicate
   if (format === 'FULL' && clientId && conventionId) {
     const clientConventionKey = `${clientId}_${conventionId}`;
-    const count = clientIdCounts.get(clientId) || 0;
-    
-    if (count > 10) {
-      // For more than 10 duplicates, use sequential 7-digit number (0000001, 0000002, etc.)
-      // The sequential number is specific to this client ID and convention
-      const seqKey = `seq_${clientConventionKey}`;
-      let seqNum = sequentialNumbers.get(seqKey) || 1;
-      
-      // Format as IDFACTURABASE + 7-digit sequential number
-      const sequentialPart = seqNum.toString().padStart(7, '0');
-      const receiptNumber = `IDFACTURABASE${sequentialPart}`.padEnd(20, '0');
-      
-      // Increment for next occurrence of this client ID
+    if (occurrence >= 10) {
+      const seqKey = `full_${clientConventionKey}`;
+      const seqNum = sequentialNumbers.get(seqKey) || 1;
+      // After reaching IDFACTURABASE0091125, vary only the last 5 positions (00001, 00002, ...)
+      const lastFive = seqNum.toString().padStart(5, '0');
+      const receiptNumber = `${fixedPrefix}${lastFive}`;
       sequentialNumbers.set(seqKey, seqNum + 1);
-      
       return receiptNumber;
     }
   }

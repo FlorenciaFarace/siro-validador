@@ -73,6 +73,8 @@ export default function DebtBaseGeneratorTab() {
     newConventions.forEach(convention => {
       // Track occurrences of each client ID within this convention
       const clientIdCounts = new Map<string, number>();
+      // Track used 5-digit tails per client for FULL auto-generation to ensure uniqueness
+      const usedFullTailsByClient = new Map<string, Set<string>>();
       
       convention.clients.forEach(client => {
         if (formData.receiptGeneration === 'AUTOMATIC' && client.id) {
@@ -82,14 +84,17 @@ export default function DebtBaseGeneratorTab() {
           
           // Generate receipt number based on format
           if (formData.format === 'FULL') {
-            // For FULL format, use the existing formatReceiptNumber
-            client.receiptNumber = formatReceiptNumber(
-              'IDFACTURABASE00',
-              formData.conceptId,
-              formData.period,
-              'FULL',
-              count // occurrence (0 for first, 1 for second, etc.)
-            );
+            // For FULL format, generate random 5-digit tail and ensure uniqueness per client within this convention
+            let tailSet = usedFullTailsByClient.get(client.id);
+            if (!tailSet) { tailSet = new Set<string>(); usedFullTailsByClient.set(client.id, tailSet); }
+            let random5 = '';
+            let attempts = 0;
+            do {
+              random5 = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+              attempts++;
+            } while (tailSet.has(random5) && attempts < 1000);
+            tailSet.add(random5);
+            client.receiptNumber = `IDFACTURABASE00${random5}`;
           } else {
             // BASIC format detail
             // Generate receipt number as 1-digit concept ID + 4-digit period (MMAA)
@@ -320,6 +325,11 @@ export default function DebtBaseGeneratorTab() {
     let recordCount = 0;
 
     formData.conventions.forEach(convention => {
+      // Track occurrences of each client ID within this convention for generation
+      const genClientIdCounts = new Map<string, number>();
+      // Track used 5-digit tails per client for FULL auto-generation to ensure uniqueness
+      const usedFullTailsByClient = new Map<string, Set<string>>();
+      
       convention.clients.forEach(client => {
         let receiptNum = '';
         
@@ -331,12 +341,31 @@ export default function DebtBaseGeneratorTab() {
           const effectiveConceptId = clientIdCount > 1 ? formData.conceptId : '0';
           
           // Generate automatic receipt number with the effective concept ID
-          receiptNum = formatReceiptNumber(
-            'IDFACTURABASE00',
-            effectiveConceptId,
-            formData.period,
-            formData.format
-          );
+          const occ = genClientIdCounts.get(client.id) ?? 0;
+          if (formData.format === 'FULL') {
+            let tailSet = usedFullTailsByClient.get(client.id);
+            if (!tailSet) { tailSet = new Set<string>(); usedFullTailsByClient.set(client.id, tailSet); }
+            let random5 = '';
+            let attempts = 0;
+            do {
+              random5 = Math.floor(Math.random() * 100000).toString().padStart(5, '0');
+              attempts++;
+            } while (tailSet.has(random5) && attempts < 1000);
+            tailSet.add(random5);
+            receiptNum = `IDFACTURABASE00${random5}`;
+          } else {
+            receiptNum = formatReceiptNumber(
+              'IDFACTURABASE00',
+              effectiveConceptId,
+              formData.period,
+              formData.format,
+              occ,
+              client.id,
+              convention.id
+            );
+          }
+          genClientIdCounts.set(client.id, occ + 1);
+        
         } else if (client.receiptNumber) {
           receiptNum = client.receiptNumber;
         }
