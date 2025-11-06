@@ -90,7 +90,7 @@ export const formatReceiptNumber = (
     // Create a unique key for this client+convention combination
     const clientConventionKey = `${clientId}_${conventionId}`;
     
-    // If we already have a receipt number for this client ID, return it
+    // If we've already generated a receipt number for this client+convention, return it
     if (clientReceiptNumbers.has(clientConventionKey)) {
       return clientReceiptNumbers.get(clientConventionKey)!;
     }
@@ -99,15 +99,19 @@ export const formatReceiptNumber = (
     const count = clientIdCounts.get(clientConventionKey) || 0;
     clientIdCounts.set(clientConventionKey, count + 1);
 
-    let receiptNumber: string;
-    const formattedPeriod = period.padStart(4, '0').slice(-4); // Ensure 4 digits (MMAA)
-    
-    // Generate FULL format receipt number first
-    const fixedPrefix = 'IDFACTURABASE00';
-    const occurrenceDigit = Math.min(count, 9);
-    const fullFormatNumber = `${fixedPrefix}${occurrenceDigit}${formattedPeriod}`.padEnd(20, '0');
+    // First generate the FULL format receipt number
+    const fullFormatNumber = formatReceiptNumber(
+      'IDFACTURABASE00',
+      conceptId,
+      period,
+      'FULL',
+      count,
+      clientId,
+      conventionId
+    );
     
     // For BASIC format, use last 5 digits of the FULL format receipt number
+    let receiptNumber: string;
     if (count < 10) {
       // First 10 duplicates: Use last 5 digits of FULL format
       receiptNumber = fullFormatNumber.slice(-5);

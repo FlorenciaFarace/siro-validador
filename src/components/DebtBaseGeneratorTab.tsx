@@ -13,6 +13,9 @@ import {
 import { format, addDays, isBefore, parse } from 'date-fns';
 
 export default function DebtBaseGeneratorTab() {
+  // Track client ID occurrences for receipt number generation
+  const clientIdCounts = new Map<string, number>();
+
   const [formData, setFormData] = useState<DebtBaseFormData>(() => {
     const data = { ...initialFormData };
     // Initialize with current period (MMAA)
@@ -69,34 +72,49 @@ export default function DebtBaseGeneratorTab() {
     
     newConventions.forEach(convention => {
       // Track occurrences of each client ID within this convention
-      const clientIdCounts: Record<string, number> = {};
+      const clientIdCounts = new Map<string, number>();
       
       convention.clients.forEach(client => {
         if (formData.receiptGeneration === 'AUTOMATIC' && client.id) {
           // Count occurrences of this client ID to handle duplicates
-          const count = clientIdCounts[client.id] || 0;
-          clientIdCounts[client.id] = count + 1;
+          const count = clientIdCounts.get(client.id) ?? 0;
+          clientIdCounts.set(client.id, count + 1);
           
-          // For BASIC format, we need to pass the total number of clients in the convention
+          // Generate receipt number based on format
           if (formData.format === 'FULL') {
             // For FULL format, use the existing formatReceiptNumber
             client.receiptNumber = formatReceiptNumber(
-              '', // Base not used in current implementation
+              'IDFACTURABASE00',
               formData.conceptId,
               formData.period,
               'FULL',
               count // occurrence (0 for first, 1 for second, etc.)
             );
           } else {
-            // For BASIC format, pass the total number of clients in the convention
-            client.receiptNumber = formatReceiptNumber(
-              '',
-              formData.conceptId,
-              formData.period,
-              'BASIC',
-              count,
-              convention.clients.length // Pass the total number of clients in this convention
-            );
+            // BASIC format detail
+            // Generate receipt number as 1-digit concept ID + 4-digit period (MMAA)
+            const conceptId = formData.conceptId || '0';
+            const period = formData.period.padStart(4, '0').slice(-4); // Ensure 4 digits (MMAA)
+            
+            // Count occurrences of this client ID in the current convention
+            const clientConventionKey = `${client.id}_${convention.id}`;
+            const count = clientIdCounts.get(clientConventionKey) || 0;
+            
+            // For first 10 duplicates, use concept ID + period
+            // After 10 duplicates, switch to sequential numbering (00001, 00002, etc.)
+            if (count < 10) {
+              // Calculate concept digit (0-9) based on occurrence count
+              const conceptDigit = (parseInt(conceptId, 10) + count) % 10;
+              // Format as 5 digits: 1 digit concept + 4 digits period
+              client.receiptNumber = `${conceptDigit}${period}`.slice(0, 5);
+            } else {
+              // For more than 10 duplicates, use sequential numbering
+              const seqNumber = (count - 9).toString().padStart(5, '0');
+              client.receiptNumber = seqNumber;
+            }
+            
+            // Update the count for this client+convention
+            clientIdCounts.set(clientConventionKey, count + 1);
           }
         }
       });
@@ -324,11 +342,14 @@ export default function DebtBaseGeneratorTab() {
         }
 
         if (formData.format === 'FULL') {
+          // Use the client's receipt number if it exists, otherwise use the generated one
+          const effectiveReceiptNum = client.receiptNumber || receiptNum;
+          
           // FULL format detail
           const detail = [
             '5', // Record type
             client.id.padStart(9, '0') + convention.id.padStart(10, '0'), // Reference number (9 client + 10 convention)
-            receiptNum.padEnd(20, '0'), // Invoice ID (20 chars)
+            effectiveReceiptNum.padEnd(20, '0'), // Invoice ID (20 chars)
             '0', // Currency code
             formData.firstDueDate.replace(/-/g, ''), // First due date (YYYYMMDD)
             formatAmount(formData.firstAmount, 11), // First amount (11 chars, 9.2)
@@ -353,18 +374,52 @@ export default function DebtBaseGeneratorTab() {
           lines.push(detail);
         } else {
           // BASIC format detail
+          // Generate receipt number based on the client's receipt number
+          let receiptNumber = client.receiptNumber || '';
+          
+          // If no receipt number was generated, create one
+          if (!receiptNumber) {
+            const conceptId = formData.conceptId || '0';
+            const period = formData.period.padStart(4, '0').slice(-4); // Ensure 4 digits (MMAA)
+            
+            // Count occurrences of this client ID in the current convention
+            const clientConventionKey = `${client.id}_${convention.id}`;
+            const count = clientIdCounts.get(clientConventionKey) || 0;
+            
+            // For first 10 duplicates, use concept ID + period
+            // After 10 duplicates, switch to sequential numbering (00001, 00002, etc.)
+            if (count < 10) {
+              // Calculate concept digit (0-9) based on occurrence count
+              const conceptDigit = (parseInt(conceptId, 10) + count) % 10;
+              // Format as 5 digits: 1 digit concept + 4 digits period
+              receiptNumber = `${conceptDigit}${period}`;
+            } else {
+              // For more than 10 duplicates, use sequential numbering
+              const seqNumber = (count - 9).toString().padStart(5, '0');
+              receiptNumber = seqNumber;
+            }
+            
+            // Store the generated receipt number
+            client.receiptNumber = receiptNumber;
+            // Update the count for this client+convention
+            clientIdCounts.set(clientConventionKey, count + 1);
+          }
+          
+          // Ensure receipt number is exactly 5 digits
+          receiptNumber = receiptNumber.padStart(5, '0').slice(0, 5);
+          
           const detail = [
-            formData.conceptId + formData.period, // Debt ID (concept + period)
-            '001', // Concept identifier
-            client.id.padStart(9, '0') + convention.id.padStart(10, '0'), // User ID (9 client + 10 convention)
-            formData.firstDueDate.replace(/-/g, '').substring(2), // First due date (yymmdd)
-            formatAmount(formData.firstAmount, 12), // First amount (12 chars, 10.2)
-            formData.secondDueDate ? formData.secondDueDate.replace(/-/g, '').substring(2) : '000000', // Second due date or zeros
-            formData.secondAmount ? formatAmount(formData.secondAmount, 12) : '0'.repeat(12), // Second amount or zeros
-            formData.thirdDueDate ? formData.thirdDueDate.replace(/-/g, '').substring(2) : '000000', // Third due date or zeros
-            formData.thirdAmount ? formatAmount(formData.thirdAmount, 12) : '0'.repeat(12), // Third amount or zeros
+            receiptNumber, // 01-05: IDENTIFICADOR DE DEUDA (5 digits)
+            '001', // 06-08: IDENTIFICADOR DE CONCEPTO (fixed '001')
+            client.id.padStart(9, '0') + convention.id.padStart(10, '0'), // 09-27: IDENTIFICADOR DE USUARIO (9 client + 10 convention)
+            formData.firstDueDate.replace(/-/g, '').substring(2), // 28-33: FECHA 1° VENCIMIENTO (yymmdd)
+            formatAmount(formData.firstAmount, 12), // 34-45: IMPORTE 1° VENCIMIENTO (12 chars, 10.2)
+            formData.secondDueDate ? formData.secondDueDate.replace(/-/g, '').substring(2) : '000000', // 46-51: FECHA 2° VENCIMIENTO
+            formData.secondAmount ? formatAmount(formData.secondAmount, 12) : '0'.repeat(12), // 52-63: IMPORTE 2° VENCIMIENTO
+            formData.thirdDueDate ? formData.thirdDueDate.replace(/-/g, '').substring(2) : '000000', // 64-69: FECHA 3° VENCIMIENTO
+            formData.thirdAmount ? formatAmount(formData.thirdAmount, 12) : '0'.repeat(12), // 70-81: IMPORTE 3° VENCIMIENTO
             (formData.ticketMessage.padEnd(15, ' ').substring(0, 15) + 
-             (formData.secondaryMessage || '').padEnd(25, ' ').substring(0, 25)).padEnd(50, ' ') // Messages (15 + 25) + 10 spaces
+             (formData.secondaryMessage || '').padEnd(25, ' ').substring(0, 25)).padEnd(50, ' ') // 82-131: MENSAJE (15 + 25 + 10 spaces)
           ].join('');
           
           if (detail.length !== 131) {
