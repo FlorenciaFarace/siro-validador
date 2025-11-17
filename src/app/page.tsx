@@ -4,8 +4,9 @@ import { useState } from 'react';
 import SiroParserTab from '@/components/SiroParserTab';
 import DebtBaseGeneratorTab from '@/components/DebtBaseGeneratorTab';
 import SiroLogo from '@/components/SiroLogo';
+import RenditionsTab from '@/components/RenditionsTab';
 
-type Tab = 'validator' | 'generator';
+type Tab = 'validator' | 'generator' | 'renditions';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('validator');
@@ -42,6 +43,16 @@ export default function Home() {
                   Generador de Base de Deuda
                 </button>
                 <button
+                  onClick={() => setActiveTab('renditions')}
+                  className={`px-3 py-2 text-sm font-medium ${
+                    activeTab === 'renditions'
+                      ? 'text-white border-b-2 border-white'
+                      : 'text-[var(--siro-light-gray)] hover:text-white'
+                  }`}
+                >
+                  Archivos de Rendición
+                </button>
+                <button
                   disabled
                   className="px-3 py-2 text-sm font-medium text-[var(--siro-light-gray)] opacity-60 cursor-not-allowed"
                 >
@@ -61,7 +72,9 @@ export default function Home() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeTab === 'validator' ? <SiroParserTab /> : <DebtBaseGeneratorTab />}
+        {activeTab === 'validator' && <SiroParserTab />}
+        {activeTab === 'generator' && <DebtBaseGeneratorTab />}
+        {activeTab === 'renditions' && <RenditionsTab />}
       </main>
     </div>
   );

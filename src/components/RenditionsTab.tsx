@@ -1,0 +1,438 @@
+'use client';
+
+import { useState } from 'react';
+import FileUpload from '@/components/FileUpload';
+
+export default function RenditionsTab() {
+  const [format, setFormat] = useState<string>('');
+  const [channels, setChannels] = useState<string[]>([]);
+  const [paymentDate, setPaymentDate] = useState<string>('');
+  const [onlinePayments, setOnlinePayments] = useState<boolean>(false);
+  const [uploaded, setUploaded] = useState<{ file: File; content: string; uploadedAt: Date } | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [preview, setPreview] = useState<string>('');
+  const [brandSendDate, setBrandSendDate] = useState<string>('');
+  const [isChannelsOpen, setIsChannelsOpen] = useState<boolean>(false);
+  const [barcode, setBarcode] = useState<string>('');
+  const [firstDueDate, setFirstDueDate] = useState<string>('');
+
+  // Helpers
+  const padLeft = (s: string, len: number, ch: string) => (s ?? '').toString().padStart(len, ch);
+  const padRight = (s: string, len: number, ch: string) => (s ?? '').toString().padEnd(len, ch);
+  const onlyDigits = (s: string) => (s ?? '').replace(/\D+/g, '');
+  const fmtDate = (s: string) => {
+    if (!s) return '00000000';
+    // Accept YYYY-MM-DD, DD/MM/YYYY, YYYYMMDD
+    const clean = s.includes('-') ? s.replace(/-/g, '') : s.includes('/') ? s.split('/').reverse().join('') : s;
+    return padLeft(clean.slice(0, 8), 8, '0');
+  };
+  const extractFirstDueDate = (content?: string) => {
+    if (!content) return '';
+    const lines = content.split(/\r?\n/).filter((l) => l.trim() !== '');
+    if (lines.length === 0) return '';
+    const line = lines[0];
+    // Full: positions 42-49 (1-indexed) => indexes 41..49 (8 chars)
+    if (line.length >= 49) {
+      const candidate = line.slice(41, 49);
+      if (/^\d{8}$/.test(candidate)) return candidate;
+      // Fallback: buscar el primer bloque de 8 dígitos que parezca AAAAMMDD (año 19xx/20xx)
+      const m = line.match(/\d{8}/g);
+      if (m) {
+        const hit = m.find((d) => /^(19|20)\d{6}$/.test(d));
+        if (hit) return hit;
+      }
+    }
+    // Básico: tentativa 8 dígitos en 28-35 (1-indexed) => 27..35
+    if (line.length >= 35) {
+      const candidate8 = line.slice(27, 35);
+      if (/^\d{8}$/.test(candidate8)) return candidate8;
+      // Si fueran 6 dígitos (28-33 => 27..33), interpretar como YYMMDD y convertir a AAAAMMDD usando año actual
+      const candidate6 = line.slice(27, 33);
+      if (/^\d{6}$/.test(candidate6)) {
+        const currentYear = String(new Date().getFullYear());
+        const mm = candidate6.slice(2, 4);
+        const dd = candidate6.slice(4, 6);
+        return `${currentYear}${mm}${dd}`;
+      }
+    }
+    return '';
+  };
+  const addDaysYYYYMMDD = (yyyymmdd: string, days: number) => {
+    if (!/^[0-9]{8}$/.test(yyyymmdd)) return yyyymmdd;
+    const y = parseInt(yyyymmdd.slice(0, 4), 10);
+    const m = parseInt(yyyymmdd.slice(4, 6), 10) - 1;
+    const d = parseInt(yyyymmdd.slice(6, 8), 10);
+    const dt = new Date(Date.UTC(y, m, d));
+    dt.setUTCDate(dt.getUTCDate() + days);
+    const yy = dt.getUTCFullYear();
+    const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getUTCDate()).padStart(2, '0');
+    return `${yy}${mm}${dd}`;
+  };
+  const fmtAmount11 = (value: string | number) => {
+    const n = typeof value === 'number' ? value : parseFloat((value ?? '0').toString().replace(',', '.'));
+    const cents = Math.round((isNaN(n) ? 0 : n) * 100);
+    return padLeft(String(cents), 11, '0');
+  };
+  const randomDigits = (len: number) => {
+    let s = '';
+    while (s.length < len) {
+      s += Math.floor(Math.random() * 10).toString();
+    }
+    return s.slice(0, len);
+  };
+  const genPaymentId10 = (used: Set<string>) => {
+    let id = '';
+    let safety = 0;
+    do {
+      // combinar tiempo + aleatorio y tomar últimos 10 dígitos
+      const base = `${Date.now()}${Math.floor(Math.random() * 1e9)}`;
+      id = base.replace(/\D/g, '').slice(-10);
+      if (id.length < 10) {
+        id = (id + randomDigits(10)).slice(-10);
+      }
+      safety++;
+    } while (used.has(id) && safety < 1000);
+    used.add(id);
+    return id;
+  };
+  const isCash = (c: string) => ['PF', 'RP', 'PP', 'CE', 'BM', 'BR','ASJ'].includes(c);
+  const isCashChannelActive = () => channels.some((c) => isCash(c));
+  const computePaymentDate = (ch: string) => {
+    if (ch === 'MC') {
+      return fmtDate(brandSendDate);
+    }
+    if (ch === 'VS') {
+      const base = fmtDate(brandSendDate);
+      return addDaysYYYYMMDD(base, 1);
+    }
+    if (ch === 'DD+') {
+      return fmtDate(firstDueDate);
+    }
+    // TODO: Para DD+ usar primer vencimiento de la base de deuda cuando esté mapeado
+    return fmtDate(paymentDate);
+  };
+  const addBusinessDays = (date: Date, days: number) => {
+    const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+    let added = 0;
+    while (added < days) {
+      d.setUTCDate(d.getUTCDate() + 1);
+      const day = d.getUTCDay();
+      if (day !== 0 && day !== 6) {
+        added++;
+      }
+    }
+    return d;
+  };
+  const addBusinessDaysYYYYMMDD = (yyyymmdd: string, days: number) => {
+    if (!/^\d{8}$/.test(yyyymmdd)) return yyyymmdd;
+    const y = parseInt(yyyymmdd.slice(0, 4), 10);
+    const m = parseInt(yyyymmdd.slice(4, 6), 10) - 1;
+    const d = parseInt(yyyymmdd.slice(6, 8), 10);
+    const dt = new Date(Date.UTC(y, m, d));
+    const res = addBusinessDays(dt, days);
+    const yy = res.getUTCFullYear();
+    const mm = String(res.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(res.getUTCDate()).padStart(2, '0');
+    return `${yy}${mm}${dd}`;
+  };
+  const computeAccreditationDays = (ch: string) => {
+    const sf = ['CEF', 'RSF', 'FSF', 'ASF', 'PSF']; // Canales sin factura
+    if (ch === 'TQR') return 1; // QR
+    if (ch === 'DB') return 1; // Debin
+    if (ch === 'TI') return 1; // Transferencia Imputada
+    if (ch.startsWith('DD')) return 1; // Débito Directo variantes
+    if (ch === 'MC' || ch === 'VS') return 10; // Marcas
+    if (ch === 'LK' || ch === 'PC') return 3; // CPE principales
+    if (ch === 'LKO' || ch === 'PCO') return 3; // Online
+    if (ch === 'BPD') return 3; // Botón Débito
+    if (isCash(ch) || sf.includes(ch)) return 3; // Efectivo y sin factura
+    return 3; // Default provisional
+  };
+  const buildUnifiedRecord = (opts: { channel: string; barcodeValue?: string; paymentId: string }) => {
+    const ch = (opts.channel || '').slice(0, 3);
+    const fechaPago = computePaymentDate(ch); // 01-08
+    const fechaAcred = addBusinessDaysYYYYMMDD(fechaPago, computeAccreditationDays(ch)); // 09-16
+    const fecha1erVto = fmtDate(firstDueDate || paymentDate); // 17-24
+    const importePagado = fmtAmount11(0); // 25-35 (placeholder hasta mapear)
+    const idUsuario = padLeft('', 8, '0'); // 36-43
+    const idConcepto = padLeft('', 1, '0'); // 44
+    const codigoBarras = padRight(onlyDigits(opts.barcodeValue || ''), 59, ' '); // 45-103
+    const idComprobante = padLeft('', 20, '0'); // 104-123
+    const canalCobro = padRight(ch, 3, ' '); // 124-126
+    const codRechazo = padRight('', 3, ' '); // 127-129
+    const descRechazo = padRight('', 20, ' '); // 130-149
+    const cuotas = padLeft('', 2, '0'); // 150-151
+    const tarjeta = padRight('', 15, ' '); // 152-166
+    const filler = padRight('', 60, ' '); // 167-226
+    const idPago = padLeft(onlyDigits(opts.paymentId || ''), 10, '0'); // 227-236 (10 dígitos)
+    const idResultado = padRight('', 36, ' '); // 237-272
+    const idRefOperacion = padRight('', 100, ' '); // 273-372
+    const idClienteExt = padLeft('', 15, '0'); // 373-387
+    const nroTerminal = padRight('', 10, ' '); // 388-397
+    const reservado = padRight('', 79, ' '); // 398-476
+
+    const record = [
+      fechaPago,
+      fechaAcred,
+      fecha1erVto,
+      importePagado,
+      idUsuario,
+      idConcepto,
+      codigoBarras,
+      idComprobante,
+      canalCobro,
+      codRechazo,
+      descRechazo,
+      cuotas,
+      tarjeta,
+      filler,
+      idPago,
+      idResultado,
+      idRefOperacion,
+      idClienteExt,
+      nroTerminal,
+      reservado,
+    ].join('');
+    return record.length === 476 ? record : padRight(record.slice(0, 476), 476, ' ');
+  };
+
+  const handleFileUpload = async (data: { file: File; content: string; uploadedAt: Date }) => {
+    setUploaded(data);
+    setFirstDueDate(extractFirstDueDate(data?.content));
+  };
+
+  const handleGenerate = () => {
+    setIsProcessing(true);
+    try {
+      // Generar 1 registro por canal seleccionado (independiente de la cantidad de filas de la base)
+      const selected = channels || [];
+      const usedIds = new Set<string>();
+      const records = selected.map((ch) => {
+        const paymentId = genPaymentId10(usedIds);
+        return buildUnifiedRecord({ channel: ch, barcodeValue: isCash(ch) ? barcode : '', paymentId });
+      });
+      setPreview(records.join('\n'));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDownload = () => {
+    if (!preview) return;
+    const blob = new Blob([preview], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'rendicion.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="space-y-8">
+      <div className="text-center">
+        <h2 className="text-2xl font-bold text-[var(--siro-green)] mb-4">Archivos de Rendición</h2>
+        <p className="text-gray-600 max-w-2xl mx-auto">
+          Complete el formulario para generar archivos de rendición.
+        </p>
+      </div>
+
+      <form className="max-w-4xl mx-auto bg-white p-6 rounded-lg shadow-md">
+        {/* Row 1: selects */}
+        <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Seleccionar Formato</label>
+            <select
+              className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white"
+              value={format}
+              onChange={(e) => setFormat(e.target.value)}
+            >
+              <option value="">Seleccione...</option>
+              <option value="ESTANDAR">Estándar</option>
+              <option value="ALTERNATIVO">Alternativo</option>
+              <option value="EXTENDIDO">Extendido</option>
+              <option value="INTEGRADO">Integrado</option>
+              <option value="UNIFICADO">Unificado</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Seleccionar Canales</label>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsChannelsOpen((o) => !o)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md bg-white text-left"
+              >
+                {channels.length
+                  ? `${channels.length} canal${channels.length > 1 ? 'es' : ''} seleccionado${channels.length > 1 ? 's' : ''}`
+                  : 'Seleccione...'}
+              </button>
+              {isChannelsOpen && (
+                <div className="absolute z-10 mt-1 w-full max-h-64 overflow-auto rounded-md border border-gray-200 bg-white shadow-lg">
+                  <div className="p-2 space-y-2">
+                    {[
+                      { v: 'PF', l: 'PF: Pago Fácil' },
+                      { v: 'RP', l: 'RP: Rapipago' },
+                      { v: 'PP', l: 'PP: Provincia Pagos' },
+                      { v: 'CE', l: 'CE: Cobro Express' },
+                      { v: 'BM', l: 'BM: Banco Municipal' },
+                      { v: 'BR', l: 'BR: Banco de Córdoba' },
+                      { v: 'ASJ', l: 'ASJ: Plus Pagos' },
+                      { v: 'LK', l: 'LK: Link Pagos' },
+                      { v: 'PC', l: 'PC: Pago Mis Cuentas' },
+                      { v: 'MC', l: 'MC: Mastercard' },
+                      { v: 'VS', l: 'VS: Visa' },
+                      { v: 'MCR', l: 'MCR: Mastercard rechazado' },
+                      { v: 'VSR', l: 'VSR: Visa rechazado' },
+                      { v: 'DD+', l: 'DD+: Débito Directo' },
+                      { v: 'DD-', l: 'DD-: Reversión Débito Directo' },
+                      { v: 'DDR', l: 'DDR: Rechazo Débito Directo' },
+                      { v: 'BPD', l: 'BPD: Botón de Pagos Débito' },
+                      { v: 'BPC', l: 'BPC: Botón de Pagos Crédito' },
+                      { v: 'BPR', l: 'BPR: Botón de Pagos Rechazado' },
+                      { v: 'CEF', l: 'CEF: Cobro Express sin factura' },
+                      { v: 'RSF', l: 'RSF: Rapipago sin factura' },
+                      { v: 'FSF', l: 'FSF: Pago Fácil sin factura' },
+                      { v: 'ASF', l: 'ASF: Plus Pagos sin factura' },
+                      { v: 'PSF', l: 'PSF: Bapro sin factura' },
+                      { v: 'PCO', l: 'PCO: PC Online' },
+                      { v: 'LKO', l: 'LKO: LK Online' },
+                      { v: 'PCV', l: 'PCV: Alta de deuda en PMC en Línea' },
+                      { v: 'LKV', l: 'LKV: Alta de deuda en LK Pagos en Línea' },
+                      { v: 'TI', l: 'TI: Transferencia Imputada' },
+                      { v: 'TQR', l: 'TQR: Pago con QR - Billetera virtual' },
+                      { v: 'QRE', l: 'QRE: QR Estático' },
+                      { v: 'DB', l: 'DB: Debin' },
+                    ].map((opt) => (
+                      <label key={opt.v} className="flex items-center px-1">
+                        <input
+                          type="checkbox"
+                          className="form-checkbox text-[var(--siro-green)] mr-2"
+                          checked={channels.includes(opt.v)}
+                          onChange={(e) => {
+                            setChannels((prev) =>
+                              e.target.checked ? [...prev, opt.v] : prev.filter((c) => c !== opt.v)
+                            );
+                          }}
+                        />
+                        <span className="text-sm text-gray-700">{opt.l}</span>
+                      </label>
+                    ))}
+                    <div className="pt-2 flex justify-end gap-2">
+                      <button
+                        type="button"
+                        className="text-sm text-[var(--siro-green)] hover:underline"
+                        onClick={() => setIsChannelsOpen(false)}
+                      >
+                        Cerrar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Row 1.5: payment date and extra fields */}
+        <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Fecha de Pago</label>
+            <input
+              type="date"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+              value={paymentDate}
+              onChange={(e) => setPaymentDate(e.target.value)}
+            />
+            {isCashChannelActive() && (
+              <div className="mt-3">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Código de barras</label>
+                <input
+                  type="text"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  value={barcode}
+                  onChange={(e) => setBarcode(e.target.value)}
+                  placeholder="Ingrese código de barras"
+                />
+              </div>
+            )}
+            <div className="mt-3">
+              <label className="inline-flex items-center">
+                <input
+                  type="checkbox"
+                  className="form-checkbox text-[var(--siro-green)]"
+                  checked={onlinePayments}
+                  onChange={(e) => setOnlinePayments(e.target.checked)}
+                />
+                <span className="ml-2">Pagos en línea</span>
+              </label>
+            </div>
+          </div>
+          <div>
+            {(channels.includes('MC') || channels.includes('VS')) && (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Fecha de Envío a Marcas</label>
+                <input
+                  type="date"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  value={brandSendDate}
+                  onChange={(e) => setBrandSendDate(e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+        
+
+        {/* Upload area */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 mb-2">Subir base de deuda</label>
+          <div className="w-full">
+            <FileUpload onFileUpload={handleFileUpload} isProcessing={isProcessing} />
+          </div>
+        </div>
+
+        {/* Generate button */}
+        <div className="mb-6">
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={!uploaded || isProcessing || channels.length === 0 || (isCashChannelActive() && !barcode.trim())}
+            className={`px-4 py-2 rounded-md text-white text-sm font-medium ${
+              !uploaded || isProcessing || channels.length === 0 || (isCashChannelActive() && !barcode.trim())
+                ? 'bg-gray-300 cursor-not-allowed'
+                : 'bg-[var(--siro-green)] hover:bg-[#055a2e]'
+            }`}
+          >
+            Generar
+          </button>
+        </div>
+
+        {/* Preview */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium text-gray-700 mb-2">Previsualización</label>
+          <textarea
+            className="w-full h-32 border border-gray-300 rounded-md p-3"
+            value={preview}
+            onChange={(e) => setPreview(e.target.value)}
+          />
+        </div>
+
+        {/* Download */}
+        <div className="text-left">
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={!preview}
+            className={`px-4 py-2 rounded-md text-white text-sm font-medium ${
+              preview ? 'bg-[var(--siro-green)] hover:bg-[#055a2e]' : 'bg-gray-300 cursor-not-allowed'
+            }`}
+          >
+            Descargar
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
