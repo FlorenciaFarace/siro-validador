@@ -6,6 +6,7 @@ import FileUpload from '@/components/FileUpload';
 export default function RenditionsTab() {
   const [format, setFormat] = useState<string>('');
   const [channels, setChannels] = useState<string[]>([]);
+  const [bpcQuotas, setBpcQuotas] = useState<string[]>([]);
   const [paymentDate, setPaymentDate] = useState<string>('');
   const [onlinePayments, setOnlinePayments] = useState<boolean>(false);
   const [uploaded, setUploaded] = useState<{ file: File; content: string; uploadedAt: Date } | null>(null);
@@ -30,31 +31,49 @@ export default function RenditionsTab() {
     if (!content) return '';
     const lines = content.split(/\r?\n/).filter((l) => l.trim() !== '');
     if (lines.length === 0) return '';
-    const line = lines[0];
-    // Full: positions 42-49 (1-indexed) => indexes 41..49 (8 chars)
-    if (line.length >= 49) {
-      const candidate = line.slice(41, 49);
-      if (/^\d{8}$/.test(candidate)) return candidate;
-      // Fallback: buscar el primer bloque de 8 dígitos que parezca AAAAMMDD (año 19xx/20xx)
-      const m = line.match(/\d{8}/g);
+    // 1) Intentar formato FULL: primer detalle tipo 5 de 280 caracteres
+    const fullDetail = lines.find((l) => l.length === 280 && l[0] === '5');
+    if (fullDetail) {
+      // Full: positions 42-49 (1-indexed) => indexes 41..49 (8 chars)
+      if (fullDetail.length >= 49) {
+        const candidate = fullDetail.slice(41, 49);
+        if (/^\d{8}$/.test(candidate)) return candidate;
+        // Fallback: buscar el primer bloque de 8 dígitos que parezca AAAAMMDD (año 19xx/20xx)
+        const m = fullDetail.match(/\d{8}/g);
+        if (m) {
+          const hit = m.find((d) => /^(19|20)\d{6}$/.test(d));
+          if (hit) return hit;
+        }
+      }
+    }
+
+    // 2) Intentar formato BÁSICO: primer detalle tipo 1 de 131 caracteres
+    const basicDetail = lines.find((l) => l.length === 131 && l[0] === '1');
+    if (basicDetail) {
+      // Formato básico: 6 dígitos YYMMDD en posiciones 28-33 (1-based) => substring(27, 33)
+      const candidate6 = basicDetail.substring(27, 33);
+      if (/^\d{6}$/.test(candidate6)) {
+        const yy = parseInt(candidate6.slice(0, 2), 10);
+        const mm = candidate6.slice(2, 4);
+        const dd = candidate6.slice(4, 6);
+        const fullYear = yy >= 50 ? 1900 + yy : 2000 + yy;
+        return `${fullYear}${mm}${dd}`;
+      }
+      // En caso de futuras variantes con 8 dígitos AAAAMMDD en las mismas zonas, usar el primer bloque válido
+      const m = basicDetail.match(/\d{8}/g);
       if (m) {
         const hit = m.find((d) => /^(19|20)\d{6}$/.test(d));
         if (hit) return hit;
       }
     }
-    // Básico: tentativa 8 dígitos en 28-35 (1-indexed) => 27..35
-    if (line.length >= 35) {
-      const candidate8 = line.slice(27, 35);
-      if (/^\d{8}$/.test(candidate8)) return candidate8;
-      // Si fueran 6 dígitos (28-33 => 27..33), interpretar como YYMMDD y convertir a AAAAMMDD usando año actual
-      const candidate6 = line.slice(27, 33);
-      if (/^\d{6}$/.test(candidate6)) {
-        const currentYear = String(new Date().getFullYear());
-        const mm = candidate6.slice(2, 4);
-        const dd = candidate6.slice(4, 6);
-        return `${currentYear}${mm}${dd}`;
-      }
+
+    // 3) Fallback general: buscar cualquier bloque AAAAMMDD en todo el archivo
+    const mGlobal = content.match(/\d{8}/g);
+    if (mGlobal) {
+      const hit = mGlobal.find((d) => /^(19|20)\d{6}$/.test(d));
+      if (hit) return hit;
     }
+
     return '';
   };
   const addDaysYYYYMMDD = (yyyymmdd: string, days: number) => {
@@ -81,6 +100,14 @@ export default function RenditionsTab() {
     }
     return s.slice(0, len);
   };
+  const randomHex = (len: number) => {
+    const chars = '0123456789abcdef';
+    let s = '';
+    while (s.length < len) {
+      s += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return s.slice(0, len);
+  };
   const genPaymentId10 = (used: Set<string>) => {
     let id = '';
     let safety = 0;
@@ -98,13 +125,37 @@ export default function RenditionsTab() {
   };
   const isCash = (c: string) => ['PF', 'RP', 'PP', 'CE', 'BM', 'BR','ASJ'].includes(c);
   const isCashChannelActive = () => channels.some((c) => isCash(c));
+  const toggleChannel = (channel: string, checked: boolean) => {
+    setChannels((prev) => {
+      let next = [...prev];
+
+      const add = (c: string) => {
+        if (!next.includes(c)) next.push(c);
+      };
+      const remove = (c: string) => {
+        next = next.filter((x) => x !== c);
+      };
+
+      if (checked) {
+        add(channel);
+        if (channel === 'LKV') add('LKO');
+        if (channel === 'LKO') add('LKV');
+        if (channel === 'PCV') add('PCO');
+        if (channel === 'PCO') add('PCV');
+      } else {
+        remove(channel);
+        if (channel === 'LKV') remove('LKO');
+        if (channel === 'LKO') remove('LKV');
+        if (channel === 'PCV') remove('PCO');
+        if (channel === 'PCO') remove('PCV');
+      }
+
+      return next;
+    });
+  };
   const computePaymentDate = (ch: string) => {
-    if (ch === 'MC') {
+    if (ch === 'MC' || ch === 'VS') {
       return fmtDate(brandSendDate);
-    }
-    if (ch === 'VS') {
-      const base = fmtDate(brandSendDate);
-      return addDaysYYYYMMDD(base, 1);
     }
     if (ch === 'DD+') {
       return fmtDate(firstDueDate);
@@ -149,25 +200,89 @@ export default function RenditionsTab() {
     if (isCash(ch) || sf.includes(ch)) return 3; // Efectivo y sin factura
     return 3; // Default provisional
   };
-  const buildUnifiedRecord = (opts: { channel: string; barcodeValue?: string; paymentId: string }) => {
+  const buildUnifiedRecord = (opts: { channel: string; barcodeValue?: string; paymentId: string; quotaMode?: '1' | '2-6' }) => {
     const ch = (opts.channel || '').slice(0, 3);
     const fechaPago = computePaymentDate(ch); // 01-08
     const fechaAcred = addBusinessDaysYYYYMMDD(fechaPago, computeAccreditationDays(ch)); // 09-16
-    const fecha1erVto = fmtDate(firstDueDate || paymentDate); // 17-24
+    const fecha1erVto = ch === 'TI' ? '19000101' : fmtDate(firstDueDate || paymentDate); // 17-24
     const importePagado = fmtAmount11(0); // 25-35 (placeholder hasta mapear)
     const idUsuario = padLeft('', 8, '0'); // 36-43
     const idConcepto = padLeft('', 1, '0'); // 44
     const codigoBarras = padRight(onlyDigits(opts.barcodeValue || ''), 59, ' '); // 45-103
-    const idComprobante = padLeft('', 20, '0'); // 104-123
+
+    // Número de comprobante / id de factura desde base de deuda
+    let idComprobante = padRight('', 20, ' '); // 104-123
+    if (ch === 'TI' || isCash(ch)) {
+      // TI y canales en efectivo siempre en ceros
+      idComprobante = padLeft('', 20, '0');
+    } else if (uploaded?.content) {
+      const lines = uploaded.content.split(/\r?\n/).filter((l) => l.trim() !== '');
+      let raw = '';
+      let mode: 'FULL' | 'BASIC' | null = null;
+
+      const fullDetail = lines.find((l) => l.length === 280 && l[0] === '5');
+      if (fullDetail) {
+        // FULL: posiciones 21-40 (1-based)
+        raw = fullDetail.slice(20, 40);
+        mode = 'FULL';
+      } else {
+        const basicDetail = lines.find((l) => l.length === 131 && l[0] === '1');
+        if (basicDetail) {
+          // BÁSICO: posiciones 1-5 (1-based)
+          raw = basicDetail.slice(0, 5);
+          mode = 'BASIC';
+        }
+      }
+
+      if (mode === 'FULL') {
+        idComprobante = padRight(raw.slice(0, 20), 20, ' ');
+      } else if (mode === 'BASIC') {
+        const digits = (raw || '').replace(/\D+/g, '').slice(-5); // últimos 5 dígitos
+        const last5 = padLeft(digits, 5, '0');
+        // 104-118 en ceros, 119-123 últimos 5 dígitos
+        idComprobante = padLeft('', 15, '0') + last5;
+      }
+    }
     const canalCobro = padRight(ch, 3, ' '); // 124-126
     const codRechazo = padRight('', 3, ' '); // 127-129
     const descRechazo = padRight('', 20, ' '); // 130-149
-    const cuotas = padLeft('', 2, '0'); // 150-151
-    const tarjeta = padRight('', 15, ' '); // 152-166
+
+    let cuotas = padLeft('', 2, '0'); // 150-151
+    let tarjeta = padRight('', 15, ' '); // 152-166
+
+    if (ch === 'BPC') {
+      if (opts.quotaMode === '2-6') {
+        const n = 2 + Math.floor(Math.random() * 5); // 2..6
+        cuotas = padLeft(String(n), 2, '0');
+        const brands = ['MASTER', 'VISA', 'CABAL'];
+        const brand = brands[Math.floor(Math.random() * brands.length)] || '';
+        tarjeta = padRight(brand, 15, ' ');
+      } else if (opts.quotaMode === '1') {
+        cuotas = '01';
+        const brands = ['MASTER', 'VISA', 'CABAL'];
+        const brand = brands[Math.floor(Math.random() * brands.length)] || '';
+        tarjeta = padRight(brand, 15, ' ');
+      }
+    }
     const filler = padRight('', 60, ' '); // 167-226
     const idPago = padLeft(onlyDigits(opts.paymentId || ''), 10, '0'); // 227-236 (10 dígitos)
-    const idResultado = padRight('', 36, ' '); // 237-272
-    const idRefOperacion = padRight('', 100, ' '); // 273-372
+
+    let idResultado = padRight('', 36, ' '); // 237-272
+    let idRefOperacion = padRight('', 100, ' '); // 273-372
+
+    const onlineSimChannels = ['TQR', 'DB', 'BPC', 'BPD'];
+    const onlineOrAlwaysChannels = ['LKO', 'PCO'];
+    if ((onlinePayments && onlineSimChannels.includes(ch)) || onlineOrAlwaysChannels.includes(ch)) {
+      const uuidLike = [
+        randomHex(8),
+        randomHex(4),
+        randomHex(4),
+        randomHex(4),
+        randomHex(12),
+      ].join('-');
+      idResultado = padRight(uuidLike, 36, ' ');
+      idRefOperacion = padRight('EJEMPLO ID REFERENCIA DE OPERACION', 100, ' ');
+    }
     const idClienteExt = padLeft('', 15, '0'); // 373-387
     const nroTerminal = padRight('', 10, ' '); // 388-397
     const reservado = padRight('', 79, ' '); // 398-476
@@ -205,12 +320,45 @@ export default function RenditionsTab() {
   const handleGenerate = () => {
     setIsProcessing(true);
     try {
-      // Generar 1 registro por canal seleccionado (independiente de la cantidad de filas de la base)
+      // Generar registros por canal seleccionado (independiente de la cantidad de filas de la base)
       const selected = channels || [];
       const usedIds = new Set<string>();
-      const records = selected.map((ch) => {
-        const paymentId = genPaymentId10(usedIds);
-        return buildUnifiedRecord({ channel: ch, barcodeValue: isCash(ch) ? barcode : '', paymentId });
+      const records: string[] = [];
+
+      selected.forEach((ch) => {
+        if (ch === 'BPC') {
+          const has1 = bpcQuotas.includes('1');
+          const has26 = bpcQuotas.includes('2-6');
+
+          if (has1) {
+            const paymentId1 = genPaymentId10(usedIds);
+            records.push(
+              buildUnifiedRecord({
+                channel: ch,
+                barcodeValue: isCash(ch) ? barcode : '',
+                paymentId: paymentId1,
+                quotaMode: '1',
+              })
+            );
+          }
+
+          if (has26) {
+            const paymentId2 = genPaymentId10(usedIds);
+            records.push(
+              buildUnifiedRecord({
+                channel: ch,
+                barcodeValue: isCash(ch) ? barcode : '',
+                paymentId: paymentId2,
+                quotaMode: '2-6',
+              })
+            );
+          }
+
+          // Si no hay ninguna cuota seleccionada para BPC, no se genera registro
+        } else {
+          const paymentId = genPaymentId10(usedIds);
+          records.push(buildUnifiedRecord({ channel: ch, barcodeValue: isCash(ch) ? barcode : '', paymentId }));
+        }
       });
       setPreview(records.join('\n'));
     } finally {
@@ -301,23 +449,62 @@ export default function RenditionsTab() {
                       { v: 'PCV', l: 'PCV: Alta de deuda en PMC en Línea' },
                       { v: 'LKV', l: 'LKV: Alta de deuda en LK Pagos en Línea' },
                       { v: 'TI', l: 'TI: Transferencia Imputada' },
-                      { v: 'TQR', l: 'TQR: Pago con QR - Billetera virtual' },
+                      { v: 'TQR', l: 'TQR: Pago con QR' },
                       { v: 'QRE', l: 'QRE: QR Estático' },
                       { v: 'DB', l: 'DB: Debin' },
                     ].map((opt) => (
-                      <label key={opt.v} className="flex items-center px-1">
-                        <input
-                          type="checkbox"
-                          className="form-checkbox text-[var(--siro-green)] mr-2"
-                          checked={channels.includes(opt.v)}
-                          onChange={(e) => {
-                            setChannels((prev) =>
-                              e.target.checked ? [...prev, opt.v] : prev.filter((c) => c !== opt.v)
-                            );
-                          }}
-                        />
-                        <span className="text-sm text-gray-700">{opt.l}</span>
-                      </label>
+                      <div key={opt.v} className="px-1">
+                        <label className="flex items-center">
+                          <input
+                            type="checkbox"
+                            className="form-checkbox text-[var(--siro-green)] mr-2"
+                            checked={channels.includes(opt.v)}
+                            onChange={(e) => {
+                              toggleChannel(opt.v, e.target.checked);
+                            }}
+                          />
+                          <span className="text-sm text-gray-700">{opt.l}</span>
+                        </label>
+                        {opt.v === 'BPC' && channels.includes('BPC') && (
+                          <div className="mt-2 ml-6 border-l border-gray-200 pl-3">
+                            <div className="text-xs font-semibold text-gray-600 mb-1">BPC - Cuotas</div>
+                            <label className="flex items-center px-1 mb-1">
+                              <input
+                                type="checkbox"
+                                className="form-checkbox text-[var(--siro-green)] mr-2"
+                                checked={bpcQuotas.includes('1')}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setBpcQuotas((prev) => {
+                                    if (checked) {
+                                      return prev.includes('1') ? prev : [...prev, '1'];
+                                    }
+                                    return prev.filter((q) => q !== '1');
+                                  });
+                                }}
+                              />
+                              <span className="text-xs text-gray-700">1 CUOTA</span>
+                            </label>
+                            <label className="flex items-center px-1">
+                              <input
+                                type="checkbox"
+                                className="form-checkbox text-[var(--siro-green)] mr-2"
+                                checked={bpcQuotas.includes('2-6')}
+                                onChange={(e) => {
+                                  const checked = e.target.checked;
+                                  setBpcQuotas((prev) => {
+                                    if (checked) {
+                                      return prev.includes('2-6') ? prev : [...prev, '2-6'];
+                                    }
+                                    return prev.filter((q) => q !== '2-6');
+                                  });
+                                }}
+                              />
+                              <span className="text-xs text-gray-700">2 a 6 CUOTAS</span>
+                            </label>
+                          </div>
+                        )}
+                      </div>
                     ))}
                     <div className="pt-2 flex justify-end gap-2">
                       <button
