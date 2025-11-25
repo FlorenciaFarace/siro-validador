@@ -125,6 +125,166 @@ export default function RenditionsTab() {
   };
   const isCash = (c: string) => ['PF', 'RP', 'PP', 'CE', 'BM', 'BR','ASJ'].includes(c);
   const isCashChannelActive = () => channels.some((c) => isCash(c));
+  const parseDebtBaseDetail = () => {
+    if (!uploaded?.content) return null;
+    const lines = uploaded.content.split(/\r?\n/).filter((l) => l.trim() !== '');
+
+    const full = lines.find((l) => l.length === 280 && l[0] === '5');
+    if (full) {
+      return {
+        mode: 'FULL' as const,
+        line: full,
+      };
+    }
+
+    const basic = lines.find((l) => l.length === 131 && l[0] === '1');
+    if (basic) {
+      return {
+        mode: 'BASIC' as const,
+        line: basic,
+      };
+    }
+
+    return null;
+  };
+  const normalizeAmount = (value: string, len: number) => {
+    const digits = onlyDigits(value || '');
+    if (!digits) return padLeft('', len, '0');
+    if (digits.length > len) return digits.slice(-len);
+    return padLeft(digits, len, '0');
+  };
+  const parseYYYYMMDDFromDebt = (raw: string, mode: 'FULL' | 'BASIC') => {
+    const digits = onlyDigits(raw || '');
+    if (!digits) return '';
+    if (mode === 'FULL') {
+      if (digits.length < 8) return '';
+      return digits.slice(0, 8);
+    }
+    if (digits.length < 6) return '';
+    const yy = parseInt(digits.slice(0, 2), 10);
+    const mm = digits.slice(2, 4);
+    const dd = digits.slice(4, 6);
+    if (isNaN(yy)) return '';
+    const fullYear = yy >= 50 ? 1900 + yy : 2000 + yy;
+    return `${fullYear}${mm}${dd}`;
+  };
+  const toYYMMDD = (yyyymmdd: string) => {
+    if (!/^[0-9]{8}$/.test(yyyymmdd)) return '000000';
+    return yyyymmdd.slice(2, 8);
+  };
+  const daysBetween = (fromYyyymmdd: string, toYyyymmdd: string) => {
+    if (!/^[0-9]{8}$/.test(fromYyyymmdd) || !/^[0-9]{8}$/.test(toYyyymmdd)) return '00';
+    const fy = parseInt(fromYyyymmdd.slice(0, 4), 10);
+    const fm = parseInt(fromYyyymmdd.slice(4, 6), 10) - 1;
+    const fd = parseInt(fromYyyymmdd.slice(6, 8), 10);
+    const ty = parseInt(toYyyymmdd.slice(0, 4), 10);
+    const tm = parseInt(toYyyymmdd.slice(4, 6), 10) - 1;
+    const td = parseInt(toYyyymmdd.slice(6, 8), 10);
+    const from = Date.UTC(fy, fm, fd);
+    const to = Date.UTC(ty, tm, td);
+    if (isNaN(from) || isNaN(to)) return '00';
+    const diffDays = Math.max(0, Math.round((to - from) / (1000 * 60 * 60 * 24)));
+    const s = String(diffDays);
+    return padLeft(s.length > 2 ? s.slice(-2) : s, 2, '0');
+  };
+  const buildUnifiedBarcode = (opts: { channel: string; userBarcode?: string }) => {
+    const ch = (opts.channel || '').slice(0, 3);
+
+    if (isCash(ch)) {
+      const digits = onlyDigits(opts.userBarcode || '');
+      const trimmed = digits.slice(0, 59);
+      return padRight(trimmed, 59, '0');
+    }
+
+    const parsed = parseDebtBaseDetail();
+    if (!parsed) {
+      const digits = onlyDigits(opts.userBarcode || '');
+      const trimmed = digits.slice(0, 59);
+      return padRight(trimmed, 59, '0');
+    }
+
+    const { mode, line } = parsed;
+
+    const getSlice = (start: number, end: number) => line.slice(start - 1, end);
+
+    const idUsuarioRaw = mode === 'FULL' ? getSlice(2, 10) : getSlice(9, 17);
+    const idCuentaRaw = mode === 'FULL' ? getSlice(11, 20) : getSlice(18, 27);
+
+    const f1Raw = mode === 'FULL' ? getSlice(42, 49) : getSlice(28, 33);
+    const f2Raw = mode === 'FULL' ? getSlice(61, 68) : getSlice(46, 51);
+    const f3Raw = mode === 'FULL' ? getSlice(80, 87) : getSlice(64, 69);
+
+    const imp1Raw = mode === 'FULL' ? getSlice(50, 60) : getSlice(34, 45);
+    const imp2Raw = mode === 'FULL' ? getSlice(69, 79) : getSlice(52, 63);
+    const imp3Raw = mode === 'FULL' ? getSlice(88, 98) : getSlice(70, 81);
+
+    const idUsuario = padLeft(onlyDigits(idUsuarioRaw).slice(-9), 9, '0');
+    const idCuenta = padLeft(onlyDigits(idCuentaRaw).slice(-10), 10, '0');
+
+    const f1Y = parseYYYYMMDDFromDebt(f1Raw, mode);
+    const f2Y = parseYYYYMMDDFromDebt(f2Raw, mode);
+    const f3Y = parseYYYYMMDDFromDebt(f3Raw, mode);
+
+    const fecha1 = f1Y ? toYYMMDD(f1Y) : '000000';
+    const dias2 = f1Y && f2Y ? daysBetween(f1Y, f2Y) : '00';
+    const dias3 = f2Y && f3Y ? daysBetween(f2Y, f3Y) : '00';
+
+    const use0449 = Math.random() < 0.5;
+
+    if (use0449) {
+      const imp1 = normalizeAmount(imp1Raw, 8);
+      const imp2 = normalizeAmount(imp2Raw, 8);
+      const imp3 = normalizeAmount(imp3Raw, 8);
+
+      const emp = '0449';
+      const dv1 = '0';
+      const dv2 = '0';
+
+      const barra = [
+        emp,
+        idUsuario,
+        fecha1,
+        imp1,
+        dias2,
+        imp2,
+        dias3,
+        imp3,
+        idCuenta,
+        dv1,
+        dv2,
+      ].join('');
+
+      return barra.length === 59 ? barra : padRight(barra.slice(0, 59), 59, '0');
+    }
+
+    const imp1 = normalizeAmount(imp1Raw, 7);
+    const imp2 = normalizeAmount(imp2Raw, 7);
+    const imp3 = normalizeAmount(imp3Raw, 7);
+
+    const emp = '0447';
+    const dv1 = '0';
+    const dv2 = '0';
+
+    const barra56 = [
+      emp,
+      idUsuario,
+      fecha1,
+      imp1,
+      dias2,
+      imp2,
+      dias3,
+      imp3,
+      idCuenta,
+      dv1,
+      dv2,
+    ].join('');
+
+    const head = barra56.slice(0, 44);
+    const tail = barra56.slice(44);
+    const barra59 = head + '000' + tail;
+
+    return barra59.length === 59 ? barra59 : padRight(barra59.slice(0, 59), 59, '0');
+  };
   const toggleChannel = (channel: string, checked: boolean) => {
     setChannels((prev) => {
       let next = [...prev];
@@ -208,7 +368,7 @@ export default function RenditionsTab() {
     const importePagado = fmtAmount11(0); // 25-35 (placeholder hasta mapear)
     const idUsuario = padLeft('', 8, '0'); // 36-43
     const idConcepto = padLeft('', 1, '0'); // 44
-    const codigoBarras = padRight(onlyDigits(opts.barcodeValue || ''), 59, ' '); // 45-103
+    const codigoBarras = buildUnifiedBarcode({ channel: ch, userBarcode: opts.barcodeValue }); // 45-103
 
     // Número de comprobante / id de factura desde base de deuda
     let idComprobante = padRight('', 20, ' '); // 104-123
@@ -247,7 +407,7 @@ export default function RenditionsTab() {
     const codRechazo = padRight('', 3, ' '); // 127-129
     const descRechazo = padRight('', 20, ' '); // 130-149
 
-    let cuotas = padLeft('', 2, '0'); // 150-151
+    let cuotas = padRight('', 2, ' '); // 150-151
     let tarjeta = padRight('', 15, ' '); // 152-166
 
     if (ch === 'BPC') {
@@ -283,7 +443,14 @@ export default function RenditionsTab() {
       idResultado = padRight(uuidLike, 36, ' ');
       idRefOperacion = padRight('EJEMPLO ID REFERENCIA DE OPERACION', 100, ' ');
     }
-    const idClienteExt = padLeft('', 15, '0'); // 373-387
+    let idClienteExt = padRight('', 15, ' '); // 373-387
+    if (isCash(ch) && opts.barcodeValue) {
+      const digits = onlyDigits(opts.barcodeValue);
+      if (digits.startsWith('0448') && digits.length >= 19) {
+        const idClienteExtRaw = digits.slice(4, 19); // posiciones 05-19 de la barra 0448
+        idClienteExt = padLeft(idClienteExtRaw.slice(-15), 15, '0');
+      }
+    }
     const nroTerminal = padRight('', 10, ' '); // 388-397
     const reservado = padRight('', 79, ' '); // 398-476
 
