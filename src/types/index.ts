@@ -24,7 +24,7 @@ export interface ValidationRule {
 export interface TabConfig {
   id: string;
   label: string;
-  component: React.ComponentType<any>;
+  component: React.ComponentType<unknown>;
   validationRules: ValidationRule[];
 }
 
