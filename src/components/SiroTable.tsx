@@ -50,8 +50,11 @@ export default function SiroTable({ parsedFile }: SiroTableProps) {
       </div>
     </div>
   );
+  interface TableField {
+    name: string;
+  }
 
-  const getColumnWidth = (field: any, fieldIndex: number) => {
+  const getColumnWidth = (field: TableField) => {
     // Define custom widths based on field types and expected content
     const widthMap: { [key: string]: string } = {
       'Código Registro': 'w-20',
@@ -90,7 +93,7 @@ export default function SiroTable({ parsedFile }: SiroTableProps) {
               {DETAIL_FIELDS.map((field, index) => (
                 <th 
                   key={field.name} 
-                  className={`px-2 py-3 text-left text-xs font-medium text-gray-500 uppercase border-r border-gray-200 ${getColumnWidth(field, index)}`}
+                  className={`px-2 py-3 text-left text-xs font-medium text-gray-500 uppercase border-r border-gray-200 ${getColumnWidth(field)}`}
                 >
                   <span className="font-semibold">{field.name} ({field.position[0]}-{field.position[1]}) L:{field.length}</span>
                 </th>
@@ -106,7 +109,7 @@ export default function SiroTable({ parsedFile }: SiroTableProps) {
                 {DETAIL_FIELDS.map((field, fieldIndex) => (
                   <td 
                     key={field.name} 
-                    className={`px-2 py-2 text-sm text-gray-900 font-mono border-r border-gray-200 ${getColumnWidth(field, fieldIndex)}`}
+                    className={`px-2 py-2 text-sm text-gray-900 font-mono border-r border-gray-200 ${getColumnWidth(field)}`}
                   >
                     <div 
                       className="truncate" 
