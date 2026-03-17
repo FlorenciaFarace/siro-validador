@@ -441,20 +441,28 @@ export default function RenditionsTab() {
           }
         }
       } else if (barcdDigits.startsWith('0448')) {
-        // Barcode 0448: estructura diferente
-        if (barcdDigits.length >= 19) {
-          idUsuario = padLeft(barcdDigits.slice(4, 12), 8, '0'); // Pos 5-12 → 8 dígitos
-          idConcepto = barcdDigits.slice(12, 13); // Pos 13 → 1 dígito
-          // FECHA de vencimiento en Pos 20-25 (6 dígitos YYMMDD)
-          if (barcdDigits.length >= 26) {
-            const fechaYYMMDD = barcdDigits.slice(19, 25);
-            fecha1erVto = parseYYYYMMDDFromDebt(fechaYYMMDD, 'BASIC') || fmtDate(paymentDate);
-          }
-          // Importe en barcode 0448 está en posiciones variables
-          if (barcdDigits.length >= 25) {
-            const imp1 = barcdDigits.slice(15, 23); // posición aproximada
-            importePagado = fmtAmount11(imp1 || '0');
-          }
+        // Barcode 0448: posiciones 1-based según documentación oficial
+        // [05-19] = ID USUARIO/CLIENTE (15 dígitos)
+        // [20-25] = FECHA 1ER VENCIMIENTO (AAMMDD)
+        // [26-35] = IMPORTE 1ER VENCIMIENTO (10 dígitos)
+        // [36-37] = DÍAS HASTA 2DO VTO
+        // [38-47] = IMPORTE 2DO VENCIMIENTO (10 dígitos)
+        // [48-57] = IDENTIFICADOR DE CUENTA (10 dígitos)
+        
+        if (barcdDigits.length >= 57) {
+          // ID Usuario: últimos 8 dígitos de los 15 (índices 11-18)
+          idUsuario = padLeft(barcdDigits.slice(11, 19), 8, '0');
+          
+          // ID Concepto: posición 7 de los 15 dígitos de usuario (índice 10)
+          idConcepto = barcdDigits.slice(10, 11) || '0';
+          
+          // FECHA de vencimiento en índices 19-24 (posiciones 20-25): AAMMDD
+          const fechaAMMDD = barcdDigits.slice(19, 25);
+          fecha1erVto = parseYYYYMMDDFromDebt(fechaAMMDD, 'BASIC') || fmtDate(paymentDate);
+          
+          // IMPORTE 1ER VENCIMIENTO: índices 25-34 (posiciones 26-35): 10 dígitos
+          const imp1 = barcdDigits.slice(25, 35);
+          importePagado = fmtAmount11(imp1 || '0');
         }
       } else if (barcdDigits.startsWith('0447')) {
         // Barcode 0447: similar a 0449 pero con estructura ligeramente diferente
@@ -616,8 +624,10 @@ export default function RenditionsTab() {
     if (isCash(ch) && opts.barcodeValue) {
       const digits = onlyDigits(opts.barcodeValue);
       if (digits.startsWith('0448') && digits.length >= 19) {
-        const idClienteExtRaw = digits.slice(4, 19); // posiciones 05-19 de la barra 0448
-        idClienteExt = padLeft(idClienteExtRaw.slice(-15), 15, '0');
+        // Barcode 0448: ID USUARIO/CLIENTE en posiciones 5-19 (índices 4-18 = 15 dígitos)
+        // Tomar ÚLTIMAS 9 de esos 15 (índices 10-18 = posiciones 11-19)
+        const idClienteExtRaw = digits.slice(10, 19);
+        idClienteExt = padLeft(idClienteExtRaw, 15, '0');
       }
     }
     const nroTerminal = padRight('', 10, ' '); // 388-397
