@@ -365,44 +365,64 @@ export default function RenditionsTab() {
     const fechaPago = computePaymentDate(ch); // 01-08
     const fechaAcred = addBusinessDaysYYYYMMDD(fechaPago, computeAccreditationDays(ch)); // 09-16
     const fecha1erVto = ch === 'TI' ? '19000101' : fmtDate(firstDueDate || paymentDate); // 17-24
-    const importePagado = fmtAmount11(0); // 25-35 (placeholder hasta mapear)
-    const idUsuario = padLeft('', 8, '0'); // 36-43
-    const idConcepto = padLeft('', 1, '0'); // 44
-    const codigoBarras = buildUnifiedBarcode({ channel: ch, userBarcode: opts.barcodeValue }); // 45-103
-
-    // Número de comprobante / id de factura desde base de deuda
-    let idComprobante = padRight('', 20, ' '); // 104-123
-    if (ch === 'TI' || isCash(ch)) {
-      // TI y canales en efectivo siempre en ceros
-      idComprobante = padLeft('', 20, '0');
-    } else if (uploaded?.content) {
+    
+    // Extraer importe, cliente y concepto desde la base de deuda
+    let importePagado = fmtAmount11(0); // 25-35
+    let idUsuario = padLeft('', 8, '0'); // 36-43
+    let idConcepto = padLeft('', 1, '0'); // 44
+    let idComprobante = padRight('', 20, ' '); // 104-123 (también se extrae aquí)
+    
+    if (uploaded?.content) {
       const lines = uploaded.content.split(/\r?\n/).filter((l) => l.trim() !== '');
-      let raw = '';
-      let mode: 'FULL' | 'BASIC' | null = null;
-
+      
       const fullDetail = lines.find((l) => l.length === 280 && l[0] === '5');
       if (fullDetail) {
-        // FULL: posiciones 21-40 (1-based)
-        raw = fullDetail.slice(20, 40);
-        mode = 'FULL';
+        // FULL: 280 caracteres
+        // Pos 2-10: ID Usuario → 36-43 (8 dígitos)
+        const idUsuarioRaw = fullDetail.slice(1, 10).trim();
+        idUsuario = padLeft(onlyDigits(idUsuarioRaw).slice(-8), 8, '0');
+        
+        // Pos 50-60: Importe 1er Vto → 25-35 (11 dígitos)
+        const importeRaw = fullDetail.slice(49, 60).trim();
+        importePagado = fmtAmount11(importeRaw || '0');
+        
+        // Pos 21-40: ID Factura para concepto (usar primer dígito)
+        const conceptoRaw = fullDetail.slice(20, 21).trim();
+        idConcepto = onlyDigits(conceptoRaw).slice(0, 1) || '0';
+        
+        // Pos 21-40: ID Comprobante
+        const comprobante = fullDetail.slice(20, 40);
+        idComprobante = padRight(comprobante, 20, ' ');
       } else {
         const basicDetail = lines.find((l) => l.length === 131 && l[0] === '1');
         if (basicDetail) {
-          // BÁSICO: posiciones 1-5 (1-based)
-          raw = basicDetail.slice(0, 5);
-          mode = 'BASIC';
+          // BÁSICO: 131 caracteres
+          // Pos 9-17: ID Usuario → 36-43 (8 dígitos)
+          const idUsuarioRaw = basicDetail.slice(8, 17).trim();
+          idUsuario = padLeft(onlyDigits(idUsuarioRaw).slice(-8), 8, '0');
+          
+          // Pos 34-45: Importe 1er Vto → 25-35 (11 dígitos)
+          const importeRaw = basicDetail.slice(33, 45).trim();
+          importePagado = fmtAmount11(importeRaw || '0');
+          
+          // Pos 28 (primer carácter después de referencia): Concepto
+          const conceptoRaw = basicDetail.slice(27, 28).trim();
+          idConcepto = onlyDigits(conceptoRaw).slice(0, 1) || '0';
+          
+          // Pos 1-5 para comprobante
+          const digits = (basicDetail.slice(0, 5) || '').replace(/\D+/g, '').slice(-5);
+          const last5 = padLeft(digits, 5, '0');
+          idComprobante = padLeft('', 15, '0') + last5;
         }
       }
-
-      if (mode === 'FULL') {
-        idComprobante = padRight(raw.slice(0, 20), 20, ' ');
-      } else if (mode === 'BASIC') {
-        const digits = (raw || '').replace(/\D+/g, '').slice(-5); // últimos 5 dígitos
-        const last5 = padLeft(digits, 5, '0');
-        // 104-118 en ceros, 119-123 últimos 5 dígitos
-        idComprobante = padLeft('', 15, '0') + last5;
+    } else {
+      // Si no hay archivo cargado, usar valores por defecto
+      if (ch === 'TI' || isCash(ch)) {
+        idComprobante = padLeft('', 20, '0');
       }
     }
+    
+    const codigoBarras = buildUnifiedBarcode({ channel: ch, userBarcode: opts.barcodeValue }); // 45-103
     const canalCobro = padRight(ch, 3, ' '); // 124-126
     const codRechazo = padRight('', 3, ' '); // 127-129
     const descRechazo = padRight('', 20, ' '); // 130-149
