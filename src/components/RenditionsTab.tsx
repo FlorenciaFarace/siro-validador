@@ -515,23 +515,38 @@ export default function RenditionsTab() {
       } else {
         const basicDetail = lines.find((l) => l.length === 131 && l[0] === '1');
         if (basicDetail) {
-          // BÁSICO: 131 caracteres
+          // BÁSICO: 131 caracteres - Igual procesamiento que FULL
           // Pos 9-17: ID Usuario → 36-43 (8 dígitos)
           const idUsuarioRaw = basicDetail.slice(8, 17).trim();
           idUsuario = padLeft(onlyDigits(idUsuarioRaw).slice(-8), 8, '0');
           
-          // Pos 28 (primer carácter después de referencia): Concepto
+          // Pos 18-27: ID Factura/Comprobante (10 caracteres)
+          const comprobanteRaw = basicDetail.slice(17, 27);
+          idComprobante = padRight(comprobanteRaw, 20, ' ');
+          
+          // Pos 28: Concepto (primer dígito)
           const conceptoRaw = basicDetail.slice(27, 28).trim();
           idConcepto = onlyDigits(conceptoRaw).slice(0, 1) || '0';
           
-          // Pos 1-5 para comprobante
-          const digits = (basicDetail.slice(0, 5) || '').replace(/\D+/g, '').slice(-5);
-          const last5 = padLeft(digits, 5, '0');
-          idComprobante = padLeft('', 15, '0') + last5;
+          // Extraer las tres fechas y tres importes para seleccionar el correcto
+          // Basado en lo que buildUnifiedBarcode extrae para BÁSICO:
+          const fecha1Raw = basicDetail.slice(27, 33).trim(); // Pos 28-33 (YYMMDD)
+          const importe1Raw = basicDetail.slice(33, 45).trim(); // Pos 34-45
+          const fecha2Raw = basicDetail.slice(45, 51).trim(); // Pos 46-51 (YYMMDD)
+          const importe2Raw = basicDetail.slice(51, 63).trim(); // Pos 52-63
+          const fecha3Raw = basicDetail.slice(63, 69).trim(); // Pos 64-69 (YYMMDD)
+          const importe3Raw = basicDetail.slice(69, 81).trim(); // Pos 70-81
           
-          // Para formato básico, extrae el importe disponible (usualmente solo uno)
-          const importeRaw = basicDetail.slice(33, 45).trim(); // Pos 34-45
-          importePagado = fmtAmount11(importeRaw || '0');
+          // Seleccionar importe según la fecha de pago (igual que FULL)
+          importePagado = selectImportByPaymentDate(
+            fechaPago,
+            parseYYYYMMDDFromDebt(fecha1Raw, 'BASIC') || fecha1Raw,
+            importe1Raw,
+            parseYYYYMMDDFromDebt(fecha2Raw, 'BASIC') || fecha2Raw,
+            importe2Raw,
+            parseYYYYMMDDFromDebt(fecha3Raw, 'BASIC') || fecha3Raw,
+            importe3Raw
+          );
         }
       }
     }
