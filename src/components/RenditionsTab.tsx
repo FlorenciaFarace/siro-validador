@@ -407,7 +407,7 @@ export default function RenditionsTab() {
     const ch = (opts.channel || '').slice(0, 3);
     const fechaPago = computePaymentDate(ch); // 01-08
     let fechaAcred = addBusinessDaysYYYYMMDD(fechaPago, computeAccreditationDays(ch)); // 09-16
-    let fecha1erVto = ch === 'TI' ? '19000101' : fmtDate(firstDueDate || paymentDate); // 17-24
+    let fecha1erVto = ch === 'TI' ? '19000101' : (onlinePayments ? fechaPago : fmtDate(firstDueDate || paymentDate)); // 17-24
     
     // Extraer importe, cliente y concepto desde la base de deuda
     let importePagado = fmtAmount11(0); // 25-35
