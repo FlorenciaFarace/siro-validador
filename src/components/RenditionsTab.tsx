@@ -405,7 +405,7 @@ export default function RenditionsTab() {
   
   const buildUnifiedRecord = (opts: { channel: string; barcodeValue?: string; paymentId: string; quotaMode?: '1' | '2-6' }) => {
     const ch = (opts.channel || '').slice(0, 3);
-    let fechaPago = computePaymentDate(ch); // 01-08
+    const fechaPago = computePaymentDate(ch); // 01-08
     let fechaAcred = addBusinessDaysYYYYMMDD(fechaPago, computeAccreditationDays(ch)); // 09-16
     let fecha1erVto = ch === 'TI' ? '19000101' : fmtDate(firstDueDate || paymentDate); // 17-24
     
@@ -421,71 +421,52 @@ export default function RenditionsTab() {
       
       // Determinar el tipo de barra (0447, 0448, 0449)
       if (barcdDigits.startsWith('0449')) {
-        // Barcode 0449: EMP(4) + USU(9) + FECHA(6) + IMP1(8) + DIAS2(2) + IMP2(8) + DIAS3(2) + IMP3(8) + CUENTA(10) + DV
+        // Barcode 0449: EMP(4) + USU(9) + FECHA(6) + IMP1(8) + DIAS2(2) + IMP2(8) + DIAS3(2) + IMP3(8) + CUENTA(10) + DV2
         if (barcdDigits.length >= 19) {
           idUsuario = padLeft(barcdDigits.slice(4, 13), 8, '0'); // Pos 5-13 → últimos 8 dígitos
-          
-          // FECHA en posición 13-18 (6 dígitos YYMMDD) → convertir a AAAAMMDD
-          if (barcdDigits.length >= 19) {
-            const fechaYYMMDD = barcdDigits.slice(13, 19); // 6 dígitos
-            if (/^\d{6}$/.test(fechaYYMMDD)) {
-              const yy = parseInt(fechaYYMMDD.slice(0, 2), 10);
-              const fullYear = yy >= 50 ? 1900 + yy : 2000 + yy;
-              fecha1erVto = `${fullYear}${fechaYYMMDD.slice(2, 6)}`;
-            }
+          // FECHA de vencimiento en Pos 14-19 (6 dígitos YYMMDD)
+          if (barcdDigits.length >= 20) {
+            const fechaYYMMDD = barcdDigits.slice(13, 19);
+            fecha1erVto = parseYYYYMMDDFromDebt(fechaYYMMDD, 'BASIC') || fmtDate(paymentDate);
           }
-          
-          // Importe1 en posición 19-26 (8 dígitos)
-          if (barcdDigits.length >= 27) {
-            const imp1 = barcdDigits.slice(19, 27);
+          // Importe está en diferentes posiciones según la estructura de 0449
+          // Pos 21-28 es importe1 (8 dígitos)
+          if (barcdDigits.length >= 29) {
+            const imp1 = barcdDigits.slice(20, 28);
             importePagado = fmtAmount11(imp1 || '0');
           }
-          
           // Código cliente está en posición 46-55 (últimos 10 dígitos de cuenta)
           if (barcdDigits.length >= 55) {
             idConcepto = barcdDigits.slice(54, 55); // último dígito de idCuenta
           }
         }
       } else if (barcdDigits.startsWith('0448')) {
-        // Barcode 0448: EMP(4) + USU(9) + FECHA(6) + resto...
+        // Barcode 0448: estructura diferente
         if (barcdDigits.length >= 19) {
           idUsuario = padLeft(barcdDigits.slice(4, 12), 8, '0'); // Pos 5-12 → 8 dígitos
           idConcepto = barcdDigits.slice(12, 13); // Pos 13 → 1 dígito
-          
-          // FECHA en posición 13-18 (6 dígitos YYMMDD) → convertir a AAAAMMDD
-          if (barcdDigits.length >= 19) {
-            const fechaYYMMDD = barcdDigits.slice(13, 19); // 6 dígitos
-            if (/^\d{6}$/.test(fechaYYMMDD)) {
-              const yy = parseInt(fechaYYMMDD.slice(0, 2), 10);
-              const fullYear = yy >= 50 ? 1900 + yy : 2000 + yy;
-              fecha1erVto = `${fullYear}${fechaYYMMDD.slice(2, 6)}`;
-            }
+          // FECHA de vencimiento en Pos 20-25 (6 dígitos YYMMDD)
+          if (barcdDigits.length >= 26) {
+            const fechaYYMMDD = barcdDigits.slice(19, 25);
+            fecha1erVto = parseYYYYMMDDFromDebt(fechaYYMMDD, 'BASIC') || fmtDate(paymentDate);
           }
-          
-          // Importe en posición 19-27 (8 dígitos)
-          if (barcdDigits.length >= 27) {
-            const imp1 = barcdDigits.slice(19, 27);
+          // Importe en barcode 0448 está en posiciones variables
+          if (barcdDigits.length >= 25) {
+            const imp1 = barcdDigits.slice(15, 23); // posición aproximada
             importePagado = fmtAmount11(imp1 || '0');
           }
         }
       } else if (barcdDigits.startsWith('0447')) {
-        // Barcode 0447: EMP(4) + USU(9) + FECHA(6) + IMP1(7) + ...
+        // Barcode 0447: similar a 0449 pero con estructura ligeramente diferente
         if (barcdDigits.length >= 19) {
           idUsuario = padLeft(barcdDigits.slice(4, 13), 8, '0'); // Pos 5-13
-          
-          // FECHA en posición 13-18 (6 dígitos YYMMDD) → convertir a AAAAMMDD
-          if (barcdDigits.length >= 19) {
-            const fechaYYMMDD = barcdDigits.slice(13, 19); // 6 dígitos
-            if (/^\d{6}$/.test(fechaYYMMDD)) {
-              const yy = parseInt(fechaYYMMDD.slice(0, 2), 10);
-              const fullYear = yy >= 50 ? 1900 + yy : 2000 + yy;
-              fecha1erVto = `${fullYear}${fechaYYMMDD.slice(2, 6)}`;
-            }
+          // FECHA de vencimiento en Pos 14-19 (6 dígitos YYMMDD)
+          if (barcdDigits.length >= 20) {
+            const fechaYYMMDD = barcdDigits.slice(13, 19);
+            fecha1erVto = parseYYYYMMDDFromDebt(fechaYYMMDD, 'BASIC') || fmtDate(paymentDate);
           }
-          
-          // Importe1 en posición 19-26 (7 dígitos para 0447)
-          if (barcdDigits.length >= 26) {
-            const imp1 = barcdDigits.slice(19, 26);
+          if (barcdDigits.length >= 23) {
+            const imp1 = barcdDigits.slice(15, 22); // 7 dígitos para 0447
             importePagado = fmtAmount11(imp1 || '0');
           }
         }
@@ -555,15 +536,16 @@ export default function RenditionsTab() {
       }
     }
     
+    // ESPECIAL: Canales PCV y LKV
+    // Fecha acreditación = 19000101, Importe = CEROS, pero mantiene idUsuario
+    if (ch === 'PCV' || ch === 'LKV') {
+      fechaAcred = '19000101';
+      importePagado = padLeft('', 11, '0');
+      // idUsuario se mantiene del archivo o de valores anteriores
+    }
+    
     const codigoBarras = buildUnifiedBarcode({ channel: ch, userBarcode: opts.barcodeValue }); // 45-103
     const canalCobro = padRight(ch, 3, ' '); // 124-126
-    
-    // Lógica especial para canales PCV y LKV
-    if (ch === 'PCV' || ch === 'LKV') {
-      fechaAcred = '19000101'; // Pos 09-16 = 19000101
-      importePagado = fmtAmount11(0); // Pos 25-35 = ceros
-      // idUsuario se mantiene del valor extraído (si existe)
-    }
     
     // Manejo de códigos y descripciones de rechazo para canales específicos
     let codRechazo = padRight('', 3, ' '); // 127-129
