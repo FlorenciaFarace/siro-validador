@@ -360,6 +360,49 @@ export default function RenditionsTab() {
     if (isCash(ch) || sf.includes(ch)) return 3; // Efectivo y sin factura
     return 3; // Default provisional
   };
+  
+  // Comparar dos fechas en formato AAAAMMDD. Retorna -1 si a<b, 0 si a=b, 1 si a>b
+  const compareDateYYYYMMDD = (a: string, b: string): number => {
+    if (!/^\d{8}$/.test(a) || !/^\d{8}$/.test(b)) return 0;
+    const aNum = parseInt(a, 10);
+    const bNum = parseInt(b, 10);
+    if (aNum < bNum) return -1;
+    if (aNum > bNum) return 1;
+    return 0;
+  };
+  
+  // Seleccionar importe según la fecha de pago y los rangos de vencimiento
+  const selectImportByPaymentDate = (
+    fechaPago: string,
+    fecha1: string,
+    importe1: string,
+    fecha2: string,
+    importe2: string,
+    fecha3: string,
+    importe3: string
+  ): string => {
+    // Si no hay fechas válidas, retornar el importe 1
+    if (!/^\d{8}$/.test(fechaPago)) return fmtAmount11(importe1 || '0');
+    
+    // Comparar fechaPago con los vencimientos
+    const cmp1 = compareDateYYYYMMDD(fechaPago, fecha1);
+    const cmp2 = compareDateYYYYMMDD(fechaPago, fecha2);
+    const cmp3 = compareDateYYYYMMDD(fechaPago, fecha3);
+    
+    // Si fechaPago <= fecha1: usar importe1
+    if (cmp1 <= 0) {
+      return fmtAmount11(importe1 || '0');
+    }
+    
+    // Si fecha1 < fechaPago <= fecha2: usar importe2
+    if (cmp2 <= 0) {
+      return fmtAmount11(importe2 || '0');
+    }
+    
+    // Si fechaPago > fecha2: usar importe3
+    return fmtAmount11(importe3 || '0');
+  };
+  
   const buildUnifiedRecord = (opts: { channel: string; barcodeValue?: string; paymentId: string; quotaMode?: '1' | '2-6' }) => {
     const ch = (opts.channel || '').slice(0, 3);
     const fechaPago = computePaymentDate(ch); // 01-08
@@ -382,10 +425,6 @@ export default function RenditionsTab() {
         const idUsuarioRaw = fullDetail.slice(1, 10).trim();
         idUsuario = padLeft(onlyDigits(idUsuarioRaw).slice(-8), 8, '0');
         
-        // Pos 50-60: Importe 1er Vto → 25-35 (11 dígitos)
-        const importeRaw = fullDetail.slice(49, 60).trim();
-        importePagado = fmtAmount11(importeRaw || '0');
-        
         // Pos 21-40: ID Factura para concepto (usar primer dígito)
         const conceptoRaw = fullDetail.slice(20, 21).trim();
         idConcepto = onlyDigits(conceptoRaw).slice(0, 1) || '0';
@@ -393,6 +432,25 @@ export default function RenditionsTab() {
         // Pos 21-40: ID Comprobante
         const comprobante = fullDetail.slice(20, 40);
         idComprobante = padRight(comprobante, 20, ' ');
+        
+        // Extraer las tres fechas y tres importes para seleccionar el correcto
+        const fecha1Raw = fullDetail.slice(41, 49).trim(); // Pos 42-49
+        const importe1Raw = fullDetail.slice(49, 60).trim(); // Pos 50-60
+        const fecha2Raw = fullDetail.slice(60, 68).trim(); // Pos 61-68
+        const importe2Raw = fullDetail.slice(68, 79).trim(); // Pos 69-79
+        const fecha3Raw = fullDetail.slice(79, 87).trim(); // Pos 80-87
+        const importe3Raw = fullDetail.slice(87, 98).trim(); // Pos 88-98
+        
+        // Seleccionar importe según la fecha de pago
+        importePagado = selectImportByPaymentDate(
+          fechaPago,
+          fecha1Raw,
+          importe1Raw,
+          fecha2Raw,
+          importe2Raw,
+          fecha3Raw,
+          importe3Raw
+        );
       } else {
         const basicDetail = lines.find((l) => l.length === 131 && l[0] === '1');
         if (basicDetail) {
@@ -400,10 +458,6 @@ export default function RenditionsTab() {
           // Pos 9-17: ID Usuario → 36-43 (8 dígitos)
           const idUsuarioRaw = basicDetail.slice(8, 17).trim();
           idUsuario = padLeft(onlyDigits(idUsuarioRaw).slice(-8), 8, '0');
-          
-          // Pos 34-45: Importe 1er Vto → 25-35 (11 dígitos)
-          const importeRaw = basicDetail.slice(33, 45).trim();
-          importePagado = fmtAmount11(importeRaw || '0');
           
           // Pos 28 (primer carácter después de referencia): Concepto
           const conceptoRaw = basicDetail.slice(27, 28).trim();
@@ -413,6 +467,10 @@ export default function RenditionsTab() {
           const digits = (basicDetail.slice(0, 5) || '').replace(/\D+/g, '').slice(-5);
           const last5 = padLeft(digits, 5, '0');
           idComprobante = padLeft('', 15, '0') + last5;
+          
+          // Para formato básico, extrae el importe disponible (usualmente solo uno)
+          const importeRaw = basicDetail.slice(33, 45).trim(); // Pos 34-45
+          importePagado = fmtAmount11(importeRaw || '0');
         }
       }
     } else {
