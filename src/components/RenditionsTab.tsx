@@ -406,8 +406,8 @@ export default function RenditionsTab() {
   const buildUnifiedRecord = (opts: { channel: string; barcodeValue?: string; paymentId: string; quotaMode?: '1' | '2-6' }) => {
     const ch = (opts.channel || '').slice(0, 3);
     const fechaPago = computePaymentDate(ch); // 01-08
-    const fechaAcred = addBusinessDaysYYYYMMDD(fechaPago, computeAccreditationDays(ch)); // 09-16
-    const fecha1erVto = ch === 'TI' ? '19000101' : fmtDate(firstDueDate || paymentDate); // 17-24
+    let fechaAcred = addBusinessDaysYYYYMMDD(fechaPago, computeAccreditationDays(ch)); // 09-16
+    let fecha1erVto = ch === 'TI' ? '19000101' : fmtDate(firstDueDate || paymentDate); // 17-24
     
     // Extraer importe, cliente y concepto desde la base de deuda
     let importePagado = fmtAmount11(0); // 25-35
@@ -424,6 +424,13 @@ export default function RenditionsTab() {
         // Barcode 0449: EMP(4) + USU(9) + FECHA(6) + IMP1(8) + DIAS2(2) + IMP2(8) + DIAS3(2) + IMP3(8) + CUENTA(10) + DV2
         if (barcdDigits.length >= 19) {
           idUsuario = padLeft(barcdDigits.slice(4, 13), 8, '0'); // Pos 5-13 → últimos 8 dígitos
+          // Fecha en Pos 14-19 en formato AAAAMMDD
+          if (barcdDigits.length >= 20) {
+            const fechaBarra = barcdDigits.slice(13, 21); // Pos 14-21 (AAAAMMDD - 8 dígitos)
+            if (/^\d{8}$/.test(fechaBarra)) {
+              fecha1erVto = fechaBarra; // Usar fecha de la barcode
+            }
+          }
           // Importe está en diferentes posiciones según la estructura de 0449
           // Pos 15-22 es importe1 (8 dígitos)
           if (barcdDigits.length >= 23) {
@@ -440,6 +447,13 @@ export default function RenditionsTab() {
         if (barcdDigits.length >= 19) {
           idUsuario = padLeft(barcdDigits.slice(4, 12), 8, '0'); // Pos 5-12 → 8 dígitos
           idConcepto = barcdDigits.slice(12, 13); // Pos 13 → 1 dígito
+          // Fecha en Pos 20-25 (formato puede var1ar, asumiendo AAAAMMDD)
+          if (barcdDigits.length >= 27) {
+            const fechaBarra = barcdDigits.slice(19, 27); // Pos 20-27 (AAAAMMDD)
+            if (/^\d{8}$/.test(fechaBarra)) {
+              fecha1erVto = fechaBarra; // Usar fecha de la barcode
+            }
+          }
           // Importe en barcode 0448 está en posiciones variables
           if (barcdDigits.length >= 25) {
             const imp1 = barcdDigits.slice(15, 23); // posición aproximada
@@ -450,6 +464,13 @@ export default function RenditionsTab() {
         // Barcode 0447: similar a 0449 pero con estructura ligeramente diferente
         if (barcdDigits.length >= 19) {
           idUsuario = padLeft(barcdDigits.slice(4, 13), 8, '0'); // Pos 5-13
+          // Fecha en Pos 14-19 en formato AAAAMMDD
+          if (barcdDigits.length >= 20) {
+            const fechaBarra = barcdDigits.slice(13, 21); // Pos 14-21 (AAAAMMDD)
+            if (/^\d{8}$/.test(fechaBarra)) {
+              fecha1erVto = fechaBarra; // Usar fecha de la barcode
+            }
+          }
           if (barcdDigits.length >= 23) {
             const imp1 = barcdDigits.slice(15, 22); // 7 dígitos para 0447
             importePagado = fmtAmount11(imp1 || '0');
@@ -519,6 +540,12 @@ export default function RenditionsTab() {
           importePagado = fmtAmount11(importeRaw || '0');
         }
       }
+    }
+    
+    // Manejo especial para canales PCV y LKV
+    if (ch === 'PCV' || ch === 'LKV') {
+      fechaAcred = '19000101'; // Pos 9-16 siempre fecha nula
+      importePagado = fmtAmount11(0); // Pos 25-35 siempre cero, pero mantiene idUsuario
     }
     
     const codigoBarras = buildUnifiedBarcode({ channel: ch, userBarcode: opts.barcodeValue }); // 45-103
