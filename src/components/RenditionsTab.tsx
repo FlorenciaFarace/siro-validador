@@ -415,7 +415,53 @@ export default function RenditionsTab() {
     let idConcepto = padLeft('', 1, '0'); // 44
     let idComprobante = padRight('', 20, ' '); // 104-123 (también se extrae aquí)
     
-    if (uploaded?.content) {
+    // Para canales en efectivo: extraer valores de la barcode ingresada
+    if (isCash(ch) && opts.barcodeValue) {
+      const barcdDigits = onlyDigits(opts.barcodeValue);
+      
+      // Determinar el tipo de barra (0447, 0448, 0449)
+      if (barcdDigits.startsWith('0449')) {
+        // Barcode 0449: EMP(4) + USU(9) + FECHA(6) + IMP1(8) + DIAS2(2) + IMP2(8) + DIAS3(2) + IMP3(8) + CUENTA(10) + DV2
+        if (barcdDigits.length >= 19) {
+          idUsuario = padLeft(barcdDigits.slice(4, 13), 8, '0'); // Pos 5-13 → últimos 8 dígitos
+          // Importe está en diferentes posiciones según la estructura de 0449
+          // Pos 15-22 es importe1 (8 dígitos)
+          if (barcdDigits.length >= 23) {
+            const imp1 = barcdDigits.slice(15, 23);
+            importePagado = fmtAmount11(imp1 || '0');
+          }
+          // Código cliente está en posición 46-55 (últimos 10 dígitos de cuenta)
+          if (barcdDigits.length >= 55) {
+            idConcepto = barcdDigits.slice(54, 55); // último dígito de idCuenta
+          }
+        }
+      } else if (barcdDigits.startsWith('0448')) {
+        // Barcode 0448: estructura diferente, extrae cliente de pos 5-19
+        if (barcdDigits.length >= 19) {
+          idUsuario = padLeft(barcdDigits.slice(4, 12), 8, '0'); // Pos 5-12 → 8 dígitos
+          idConcepto = barcdDigits.slice(12, 13); // Pos 13 → 1 dígito
+          // Importe en barcode 0448 está en posiciones variables
+          if (barcdDigits.length >= 25) {
+            const imp1 = barcdDigits.slice(15, 23); // posición aproximada
+            importePagado = fmtAmount11(imp1 || '0');
+          }
+        }
+      } else if (barcdDigits.startsWith('0447')) {
+        // Barcode 0447: similar a 0449 pero con estructura ligeramente diferente
+        if (barcdDigits.length >= 19) {
+          idUsuario = padLeft(barcdDigits.slice(4, 13), 8, '0'); // Pos 5-13
+          if (barcdDigits.length >= 23) {
+            const imp1 = barcdDigits.slice(15, 22); // 7 dígitos para 0447
+            importePagado = fmtAmount11(imp1 || '0');
+          }
+        }
+      }
+      // Para canal efectivo, el comprobante va siempre en ceros
+      idComprobante = padLeft('', 20, '0');
+    } else if (ch === 'TI') {
+      // CANAL TI: El número de comprobante SIEMPRE va en ceros
+      idComprobante = padLeft('', 20, '0');
+    } else if (uploaded?.content) {
       const lines = uploaded.content.split(/\r?\n/).filter((l) => l.trim() !== '');
       
       const fullDetail = lines.find((l) => l.length === 280 && l[0] === '5');
@@ -473,17 +519,24 @@ export default function RenditionsTab() {
           importePagado = fmtAmount11(importeRaw || '0');
         }
       }
-    } else {
-      // Si no hay archivo cargado, usar valores por defecto
-      if (ch === 'TI' || isCash(ch)) {
-        idComprobante = padLeft('', 20, '0');
-      }
     }
     
     const codigoBarras = buildUnifiedBarcode({ channel: ch, userBarcode: opts.barcodeValue }); // 45-103
     const canalCobro = padRight(ch, 3, ' '); // 124-126
-    const codRechazo = padRight('', 3, ' '); // 127-129
-    const descRechazo = padRight('', 20, ' '); // 130-149
+    
+    // Manejo de códigos y descripciones de rechazo para canales específicos
+    let codRechazo = padRight('', 3, ' '); // 127-129
+    let descRechazo = padRight('', 20, ' '); // 130-149
+    
+    const rechazosChannels = ['DDR', 'MCR', 'VSR', 'BPR'];
+    if (rechazosChannels.includes(ch)) {
+      // Código de rechazo (ej: 123)
+      codRechazo = '123';
+      // Descripción de rechazo: generar aleatoriamente
+      const rechazoDespList = ['FONDOS INSUFICIENTES', 'TARJ. INVALIDA'];
+      const selectedRechazo = rechazoDespList[Math.floor(Math.random() * rechazoDespList.length)];
+      descRechazo = padRight(selectedRechazo, 20, ' ');
+    }
 
     let cuotas = padRight('', 2, ' '); // 150-151
     let tarjeta = padRight('', 15, ' '); // 152-166
