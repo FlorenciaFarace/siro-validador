@@ -418,12 +418,22 @@ export default function RenditionsTab() {
     // Para canales en efectivo: extraer valores de la barcode ingresada
     if (isCash(ch) && opts.barcodeValue) {
       const barcdDigits = onlyDigits(opts.barcodeValue);
+
+      // ID Cliente para archivo unificado (posiciones 36-44):
+      // - 0444/0447/0449: 05 -> 44 y 06-13 -> 36-43
+      // - 0448: usar últimas 9 del id extendido (11-19), con 11 -> 44 y 12-19 -> 36-43
+      if ((barcdDigits.startsWith('0444') || barcdDigits.startsWith('0447') || barcdDigits.startsWith('0449')) && barcdDigits.length >= 13) {
+        idConcepto = barcdDigits.slice(4, 5) || '0';
+        idUsuario = padLeft(barcdDigits.slice(5, 13), 8, '0');
+      } else if (barcdDigits.startsWith('0448') && barcdDigits.length >= 19) {
+        idConcepto = barcdDigits.slice(10, 11) || '0';
+        idUsuario = padLeft(barcdDigits.slice(11, 19), 8, '0');
+      }
       
       // Determinar el tipo de barra (0447, 0448, 0449)
       if (barcdDigits.startsWith('0449')) {
         // Barcode 0449: EMP(4) + USU(9) + FECHA(6) + IMP1(8) + DIAS2(2) + IMP2(8) + DIAS3(2) + IMP3(8) + CUENTA(10) + DV2
         if (barcdDigits.length >= 19) {
-          idUsuario = padLeft(barcdDigits.slice(4, 13), 8, '0'); // Pos 5-13 → últimos 8 dígitos
           // FECHA de vencimiento en Pos 14-19 (6 dígitos YYMMDD)
           if (barcdDigits.length >= 20) {
             const fechaYYMMDD = barcdDigits.slice(13, 19);
@@ -434,10 +444,6 @@ export default function RenditionsTab() {
           if (barcdDigits.length >= 29) {
             const imp1 = barcdDigits.slice(20, 28);
             importePagado = fmtAmount11(imp1 || '0');
-          }
-          // Código cliente está en posición 46-55 (últimos 10 dígitos de cuenta)
-          if (barcdDigits.length >= 55) {
-            idConcepto = barcdDigits.slice(54, 55); // último dígito de idCuenta
           }
         }
       } else if (barcdDigits.startsWith('0448')) {
@@ -450,12 +456,6 @@ export default function RenditionsTab() {
         // [48-57] = IDENTIFICADOR DE CUENTA (10 dígitos)
         
         if (barcdDigits.length >= 57) {
-          // ID Usuario: últimos 8 dígitos de los 15 (índices 11-18)
-          idUsuario = padLeft(barcdDigits.slice(11, 19), 8, '0');
-          
-          // ID Concepto: posición 7 de los 15 dígitos de usuario (índice 10)
-          idConcepto = barcdDigits.slice(10, 11) || '0';
-          
           // FECHA de vencimiento en índices 19-24 (posiciones 20-25): AAMMDD
           const fechaAMMDD = barcdDigits.slice(19, 25);
           fecha1erVto = parseYYYYMMDDFromDebt(fechaAMMDD, 'BASIC') || fmtDate(paymentDate);
@@ -467,7 +467,6 @@ export default function RenditionsTab() {
       } else if (barcdDigits.startsWith('0447')) {
         // Barcode 0447: similar a 0449 pero con estructura ligeramente diferente
         if (barcdDigits.length >= 19) {
-          idUsuario = padLeft(barcdDigits.slice(4, 13), 8, '0'); // Pos 5-13
           // FECHA de vencimiento en Pos 14-19 (6 dígitos YYMMDD)
           if (barcdDigits.length >= 20) {
             const fechaYYMMDD = barcdDigits.slice(13, 19);
