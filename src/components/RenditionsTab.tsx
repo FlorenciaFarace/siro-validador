@@ -402,6 +402,32 @@ export default function RenditionsTab() {
     // Si fechaPago > fecha2: usar importe3
     return fmtAmount11(importe3 || '0');
   };
+
+  const selectRawImportByPaymentDate = (
+    fechaPago: string,
+    fecha1: string,
+    importe1: string,
+    fecha2: string,
+    importe2: string,
+    fecha3: string,
+    importe3: string
+  ): string => {
+    if (!/^[0-9]{8}$/.test(fechaPago)) return onlyDigits(importe1 || '');
+
+    const cmp1 = compareDateYYYYMMDD(fechaPago, fecha1);
+    const cmp2 = compareDateYYYYMMDD(fechaPago, fecha2);
+
+    if (cmp1 <= 0) return onlyDigits(importe1 || '');
+    if (cmp2 <= 0) return onlyDigits(importe2 || '');
+
+    return onlyDigits(importe3 || '');
+  };
+
+  const formatBarcodeAmountForUnified = (rawAmount: string) => {
+    const digits = onlyDigits(rawAmount || '');
+    if (!digits) return padLeft('', 11, '0');
+    return padLeft(digits.slice(-11), 11, '0');
+  };
   
   const buildUnifiedRecord = (opts: { channel: string; barcodeValue?: string; paymentId: string; quotaMode?: '1' | '2-6' }) => {
     const ch = (opts.channel || '').slice(0, 3);
@@ -433,18 +459,29 @@ export default function RenditionsTab() {
       // Determinar el tipo de barra (0447, 0448, 0449)
       if (barcdDigits.startsWith('0449')) {
         // Barcode 0449: EMP(4) + USU(9) + FECHA(6) + IMP1(8) + DIAS2(2) + IMP2(8) + DIAS3(2) + IMP3(8) + CUENTA(10) + DV2
-        if (barcdDigits.length >= 19) {
+        if (barcdDigits.length >= 47) {
           // FECHA de vencimiento en Pos 14-19 (6 dígitos YYMMDD)
-          if (barcdDigits.length >= 20) {
-            const fechaYYMMDD = barcdDigits.slice(13, 19);
-            fecha1erVto = parseYYYYMMDDFromDebt(fechaYYMMDD, 'BASIC') || fmtDate(paymentDate);
-          }
-          // Importe está en diferentes posiciones según la estructura de 0449
-          // Pos 21-28 es importe1 (8 dígitos)
-          if (barcdDigits.length >= 29) {
-            const imp1 = barcdDigits.slice(20, 28);
-            importePagado = fmtAmount11(imp1 || '0');
-          }
+          const fechaYYMMDD = barcdDigits.slice(13, 19);
+          const fecha1 = parseYYYYMMDDFromDebt(fechaYYMMDD, 'BASIC') || fmtDate(paymentDate);
+          const dias2 = parseInt(barcdDigits.slice(27, 29), 10) || 0;
+          const dias3 = parseInt(barcdDigits.slice(37, 39), 10) || 0;
+          const fecha2 = addDaysYYYYMMDD(fecha1, dias2);
+          const fecha3 = addDaysYYYYMMDD(fecha2, dias3);
+          const imp1 = barcdDigits.slice(19, 27); // 20-27
+          const imp2 = barcdDigits.slice(29, 37); // 30-37
+          const imp3 = barcdDigits.slice(39, 47); // 40-47
+
+          fecha1erVto = fecha1;
+          const rawSelected = selectRawImportByPaymentDate(
+            fechaPago,
+            fecha1,
+            imp1,
+            fecha2,
+            imp2,
+            fecha3,
+            imp3
+          );
+          importePagado = formatBarcodeAmountForUnified(rawSelected);
         }
       } else if (barcdDigits.startsWith('0448')) {
         // Barcode 0448: posiciones 1-based según documentación oficial
@@ -455,27 +492,52 @@ export default function RenditionsTab() {
         // [38-47] = IMPORTE 2DO VENCIMIENTO (10 dígitos)
         // [48-57] = IDENTIFICADOR DE CUENTA (10 dígitos)
         
-        if (barcdDigits.length >= 57) {
+        if (barcdDigits.length >= 47) {
           // FECHA de vencimiento en índices 19-24 (posiciones 20-25): AAMMDD
           const fechaAMMDD = barcdDigits.slice(19, 25);
-          fecha1erVto = parseYYYYMMDDFromDebt(fechaAMMDD, 'BASIC') || fmtDate(paymentDate);
-          
-          // IMPORTE 1ER VENCIMIENTO: índices 25-34 (posiciones 26-35): 10 dígitos
-          const imp1 = barcdDigits.slice(25, 35);
-          importePagado = fmtAmount11(imp1 || '0');
+          const fecha1 = parseYYYYMMDDFromDebt(fechaAMMDD, 'BASIC') || fmtDate(paymentDate);
+          const dias2 = parseInt(barcdDigits.slice(35, 37), 10) || 0;
+          const fecha2 = addDaysYYYYMMDD(fecha1, dias2);
+          const imp1 = barcdDigits.slice(25, 35); // 26-35
+          const imp2 = barcdDigits.slice(37, 47); // 38-47
+
+          fecha1erVto = fecha1;
+          const rawSelected = selectRawImportByPaymentDate(
+            fechaPago,
+            fecha1,
+            imp1,
+            fecha2,
+            imp2,
+            fecha2,
+            imp2
+          );
+          importePagado = formatBarcodeAmountForUnified(rawSelected);
         }
-      } else if (barcdDigits.startsWith('0447')) {
-        // Barcode 0447: similar a 0449 pero con estructura ligeramente diferente
-        if (barcdDigits.length >= 19) {
+      } else if (barcdDigits.startsWith('0447') || barcdDigits.startsWith('0444')) {
+        // Barcode 0444/0447: FECHA(6) + IMP1(7) + DIAS2(2) + IMP2(7) + DIAS3(2) + IMP3(7)
+        if (barcdDigits.length >= 44) {
           // FECHA de vencimiento en Pos 14-19 (6 dígitos YYMMDD)
-          if (barcdDigits.length >= 20) {
-            const fechaYYMMDD = barcdDigits.slice(13, 19);
-            fecha1erVto = parseYYYYMMDDFromDebt(fechaYYMMDD, 'BASIC') || fmtDate(paymentDate);
-          }
-          if (barcdDigits.length >= 23) {
-            const imp1 = barcdDigits.slice(15, 22); // 7 dígitos para 0447
-            importePagado = fmtAmount11(imp1 || '0');
-          }
+          const fechaYYMMDD = barcdDigits.slice(13, 19);
+          const fecha1 = parseYYYYMMDDFromDebt(fechaYYMMDD, 'BASIC') || fmtDate(paymentDate);
+          const dias2 = parseInt(barcdDigits.slice(26, 28), 10) || 0;
+          const dias3 = parseInt(barcdDigits.slice(35, 37), 10) || 0;
+          const fecha2 = addDaysYYYYMMDD(fecha1, dias2);
+          const fecha3 = addDaysYYYYMMDD(fecha2, dias3);
+          const imp1 = barcdDigits.slice(19, 26); // 20-26
+          const imp2 = barcdDigits.slice(28, 35); // 29-35
+          const imp3 = barcdDigits.slice(37, 44); // 38-44
+
+          fecha1erVto = fecha1;
+          const rawSelected = selectRawImportByPaymentDate(
+            fechaPago,
+            fecha1,
+            imp1,
+            fecha2,
+            imp2,
+            fecha3,
+            imp3
+          );
+          importePagado = formatBarcodeAmountForUnified(rawSelected);
         }
       }
       // Para canal efectivo, el comprobante va siempre en ceros
