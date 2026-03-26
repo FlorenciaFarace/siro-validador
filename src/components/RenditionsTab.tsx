@@ -172,6 +172,15 @@ export default function RenditionsTab() {
     if (!/^[0-9]{8}$/.test(yyyymmdd)) return '000000';
     return yyyymmdd.slice(2, 8);
   };
+  const toYYYYMMDDFromYYMMDD = (yymmdd: string) => {
+    const digits = onlyDigits(yymmdd || '');
+    if (!/^\d{6}$/.test(digits)) return '';
+    const yy = parseInt(digits.slice(0, 2), 10);
+    const mm = digits.slice(2, 4);
+    const dd = digits.slice(4, 6);
+    const fullYear = yy >= 50 ? 1900 + yy : 2000 + yy;
+    return `${fullYear}${mm}${dd}`;
+  };
   const daysBetween = (fromYyyymmdd: string, toYyyymmdd: string) => {
     if (!/^[0-9]{8}$/.test(fromYyyymmdd) || !/^[0-9]{8}$/.test(toYyyymmdd)) return '00';
     const fy = parseInt(fromYyyymmdd.slice(0, 4), 10);
@@ -360,290 +369,139 @@ export default function RenditionsTab() {
     if (isCash(ch) || sf.includes(ch)) return 3; // Efectivo y sin factura
     return 3; // Default provisional
   };
-  
-  // Comparar dos fechas en formato AAAAMMDD. Retorna -1 si a<b, 0 si a=b, 1 si a>b
-  const compareDateYYYYMMDD = (a: string, b: string): number => {
-    if (!/^\d{8}$/.test(a) || !/^\d{8}$/.test(b)) return 0;
-    const aNum = parseInt(a, 10);
-    const bNum = parseInt(b, 10);
-    if (aNum < bNum) return -1;
-    if (aNum > bNum) return 1;
-    return 0;
-  };
-  
-  // Seleccionar importe según la fecha de pago y los rangos de vencimiento
-  const selectImportByPaymentDate = (
-    fechaPago: string,
-    fecha1: string,
-    importe1: string,
-    fecha2: string,
-    importe2: string,
-    fecha3: string,
-    importe3: string
-  ): string => {
-    // Si no hay fechas válidas, retornar el importe 1
-    if (!/^\d{8}$/.test(fechaPago)) return fmtAmount11(importe1 || '0');
-    
-    // Comparar fechaPago con los vencimientos
-    const cmp1 = compareDateYYYYMMDD(fechaPago, fecha1);
-    const cmp2 = compareDateYYYYMMDD(fechaPago, fecha2);
-    const cmp3 = compareDateYYYYMMDD(fechaPago, fecha3);
-    
-    // Si fechaPago <= fecha1: usar importe1
-    if (cmp1 <= 0) {
-      return fmtAmount11(importe1 || '0');
-    }
-    
-    // Si fecha1 < fechaPago <= fecha2: usar importe2
-    if (cmp2 <= 0) {
-      return fmtAmount11(importe2 || '0');
-    }
-    
-    // Si fechaPago > fecha2: usar importe3
-    return fmtAmount11(importe3 || '0');
-  };
-
-  const selectRawImportByPaymentDate = (
-    fechaPago: string,
-    fecha1: string,
-    importe1: string,
-    fecha2: string,
-    importe2: string,
-    fecha3: string,
-    importe3: string
-  ): string => {
-    if (!/^[0-9]{8}$/.test(fechaPago)) return onlyDigits(importe1 || '');
-
-    const cmp1 = compareDateYYYYMMDD(fechaPago, fecha1);
-    const cmp2 = compareDateYYYYMMDD(fechaPago, fecha2);
-
-    if (cmp1 <= 0) return onlyDigits(importe1 || '');
-    if (cmp2 <= 0) return onlyDigits(importe2 || '');
-
-    return onlyDigits(importe3 || '');
-  };
-
-  const formatBarcodeAmountForUnified = (rawAmount: string) => {
-    const digits = onlyDigits(rawAmount || '');
-    if (!digits) return padLeft('', 11, '0');
-    return padLeft(digits.slice(-11), 11, '0');
-  };
-  
   const buildUnifiedRecord = (opts: { channel: string; barcodeValue?: string; paymentId: string; quotaMode?: '1' | '2-6' }) => {
     const ch = (opts.channel || '').slice(0, 3);
     const fechaPago = computePaymentDate(ch); // 01-08
-    let fechaAcred = addBusinessDaysYYYYMMDD(fechaPago, computeAccreditationDays(ch)); // 09-16
-    let fecha1erVto = ch === 'TI' ? '19000101' : (onlinePayments ? fechaPago : fmtDate(firstDueDate || paymentDate)); // 17-24
-    
-    // Extraer importe, cliente y concepto desde la base de deuda
+    const fechaAcred = addBusinessDaysYYYYMMDD(fechaPago, computeAccreditationDays(ch)); // 09-16
+    const fecha1erVto = ch === 'TI' ? '19000101' : fmtDate(firstDueDate || paymentDate); // 17-24
     let importePagado = fmtAmount11(0); // 25-35
+
+    if (isCash(ch) && opts.barcodeValue) {
+      const bDigits = onlyDigits(opts.barcodeValue);
+      if (bDigits.startsWith('0448') && bDigits.length >= 47) {
+        const due1YYMMDD = bDigits.slice(19, 25); // 20-25
+        const amount1 = bDigits.slice(25, 35); // 26-35 (10)
+        const daysToDue2 = parseInt(bDigits.slice(35, 37), 10); // 36-37
+        const amount2 = bDigits.slice(37, 47); // 38-47 (10)
+
+        const due1YYYYMMDD = toYYYYMMDDFromYYMMDD(due1YYMMDD);
+        const hasDue2 = !isNaN(daysToDue2) && daysToDue2 > 0;
+        const due2YYYYMMDD = hasDue2 && due1YYYYMMDD ? addDaysYYYYMMDD(due1YYYYMMDD, daysToDue2) : '';
+
+        const paidAmount10 =
+          !due1YYYYMMDD || fechaPago <= due1YYYYMMDD
+            ? amount1
+            : hasDue2 && due2YYYYMMDD && fechaPago <= due2YYYYMMDD
+              ? amount2
+              : amount2;
+
+        importePagado = padLeft(onlyDigits(paidAmount10).slice(-10), 11, '0');
+      } else if ((bDigits.startsWith('0447') || bDigits.startsWith('0444')) && bDigits.length >= 44) {
+        const due1YYMMDD = bDigits.slice(13, 19); // 14-19
+        const amount1 = bDigits.slice(19, 26); // 20-26 (7)
+        const daysToDue2 = parseInt(bDigits.slice(26, 28), 10); // 27-28
+        const amount2 = bDigits.slice(28, 35); // 29-35 (7)
+        const daysToDue3 = parseInt(bDigits.slice(35, 37), 10); // 36-37
+        const amount3 = bDigits.slice(37, 44); // 38-44 (7)
+
+        const due1YYYYMMDD = toYYYYMMDDFromYYMMDD(due1YYMMDD);
+        const hasDue2 = !isNaN(daysToDue2) && daysToDue2 > 0;
+        const due2YYYYMMDD = hasDue2 && due1YYYYMMDD ? addDaysYYYYMMDD(due1YYYYMMDD, daysToDue2) : '';
+        const hasDue3 = hasDue2 && !isNaN(daysToDue3) && daysToDue3 > 0;
+        const due3YYYYMMDD = hasDue3 && due2YYYYMMDD ? addDaysYYYYMMDD(due2YYYYMMDD, daysToDue3) : '';
+
+        const paidAmount7 =
+          !due1YYYYMMDD || fechaPago <= due1YYYYMMDD
+            ? amount1
+            : hasDue2 && due2YYYYMMDD && fechaPago <= due2YYYYMMDD
+              ? amount2
+              : hasDue3 && due3YYYYMMDD && fechaPago <= due3YYYYMMDD
+                ? amount3
+                : amount3;
+
+        importePagado = padLeft(onlyDigits(paidAmount7).slice(-7), 11, '0');
+      } else if (bDigits.startsWith('0449') && bDigits.length >= 47) {
+        const due1YYMMDD = bDigits.slice(13, 19); // 14-19
+        const amount1 = bDigits.slice(19, 27); // 20-27 (8)
+        const daysToDue2 = parseInt(bDigits.slice(27, 29), 10); // 28-29
+        const amount2 = bDigits.slice(29, 37); // 30-37 (8)
+        const daysToDue3 = parseInt(bDigits.slice(37, 39), 10); // 38-39
+        const amount3 = bDigits.slice(39, 47); // 40-47 (8)
+
+        const due1YYYYMMDD = toYYYYMMDDFromYYMMDD(due1YYMMDD);
+        const hasDue2 = !isNaN(daysToDue2) && daysToDue2 > 0;
+        const due2YYYYMMDD = hasDue2 && due1YYYYMMDD ? addDaysYYYYMMDD(due1YYYYMMDD, daysToDue2) : '';
+        const hasDue3 = hasDue2 && !isNaN(daysToDue3) && daysToDue3 > 0;
+        const due3YYYYMMDD = hasDue3 && due2YYYYMMDD ? addDaysYYYYMMDD(due2YYYYMMDD, daysToDue3) : '';
+
+        const paidAmount8 =
+          !due1YYYYMMDD || fechaPago <= due1YYYYMMDD
+            ? amount1
+            : hasDue2 && due2YYYYMMDD && fechaPago <= due2YYYYMMDD
+              ? amount2
+              : hasDue3 && due3YYYYMMDD && fechaPago <= due3YYYYMMDD
+                ? amount3
+                : amount3;
+
+        importePagado = padLeft(onlyDigits(paidAmount8).slice(-8), 11, '0');
+      }
+    }
+
+    // 36-43: idUsuario (8 chars) | 44: idConcepto (1 char)
+    // Según documentación UNIFICADO:
+    // - 0444/0447 y 0449: idConcepto=posición 05, idUsuario=posiciones 06-13
+    // - 0448: idConcepto=posición 11, idUsuario=posiciones 12-19
     let idUsuario = padLeft('', 8, '0'); // 36-43
     let idConcepto = padLeft('', 1, '0'); // 44
-    let idComprobante = padRight('', 20, ' '); // 104-123 (también se extrae aquí)
-    
-    // Para canales en efectivo: extraer valores de la barcode ingresada
     if (isCash(ch) && opts.barcodeValue) {
-      const barcdDigits = onlyDigits(opts.barcodeValue);
-
-      // ID Cliente para archivo unificado (posiciones 36-44):
-      // - 0444/0447/0449: 05 -> 44 y 06-13 -> 36-43
-      // - 0448: usar últimas 9 del id extendido (11-19), con 11 -> 44 y 12-19 -> 36-43
-      if ((barcdDigits.startsWith('0444') || barcdDigits.startsWith('0447') || barcdDigits.startsWith('0449')) && barcdDigits.length >= 13) {
-        idConcepto = barcdDigits.slice(4, 5) || '0';
-        idUsuario = padLeft(barcdDigits.slice(5, 13), 8, '0');
-      } else if (barcdDigits.startsWith('0448') && barcdDigits.length >= 19) {
-        idConcepto = barcdDigits.slice(10, 11) || '0';
-        idUsuario = padLeft(barcdDigits.slice(11, 19), 8, '0');
+      const bDigits = onlyDigits(opts.barcodeValue);
+      if ((bDigits.startsWith('0447') || bDigits.startsWith('0444') || bDigits.startsWith('0449')) && bDigits.length >= 13) {
+        idConcepto = bDigits.slice(4, 5);
+        idUsuario = bDigits.slice(5, 13);
+      } else if (bDigits.startsWith('0448') && bDigits.length >= 19) {
+        idConcepto = bDigits.slice(10, 11);
+        idUsuario = bDigits.slice(11, 19);
       }
-      
-      // Determinar el tipo de barra (0447, 0448, 0449)
-      if (barcdDigits.startsWith('0449')) {
-        // Barcode 0449: EMP(4) + USU(9) + FECHA(6) + IMP1(8) + DIAS2(2) + IMP2(8) + DIAS3(2) + IMP3(8) + CUENTA(10) + DV2
-        if (barcdDigits.length >= 47) {
-          // FECHA de vencimiento en Pos 14-19 (6 dígitos YYMMDD)
-          const fechaYYMMDD = barcdDigits.slice(13, 19);
-          const fecha1 = parseYYYYMMDDFromDebt(fechaYYMMDD, 'BASIC') || fmtDate(paymentDate);
-          const dias2 = parseInt(barcdDigits.slice(27, 29), 10) || 0;
-          const dias3 = parseInt(barcdDigits.slice(37, 39), 10) || 0;
-          const fecha2 = addDaysYYYYMMDD(fecha1, dias2);
-          const fecha3 = addDaysYYYYMMDD(fecha2, dias3);
-          const imp1 = barcdDigits.slice(19, 27); // 20-27
-          const imp2 = barcdDigits.slice(29, 37); // 30-37
-          const imp3 = barcdDigits.slice(39, 47); // 40-47
+    }
 
-          fecha1erVto = fecha1;
-          const rawSelected = selectRawImportByPaymentDate(
-            fechaPago,
-            fecha1,
-            imp1,
-            fecha2,
-            imp2,
-            fecha3,
-            imp3
-          );
-          importePagado = formatBarcodeAmountForUnified(rawSelected);
-        }
-      } else if (barcdDigits.startsWith('0448')) {
-        // Barcode 0448: posiciones 1-based según documentación oficial
-        // [05-19] = ID USUARIO/CLIENTE (15 dígitos)
-        // [20-25] = FECHA 1ER VENCIMIENTO (AAMMDD)
-        // [26-35] = IMPORTE 1ER VENCIMIENTO (10 dígitos)
-        // [36-37] = DÍAS HASTA 2DO VTO
-        // [38-47] = IMPORTE 2DO VENCIMIENTO (10 dígitos)
-        // [48-57] = IDENTIFICADOR DE CUENTA (10 dígitos)
-        
-        if (barcdDigits.length >= 47) {
-          // FECHA de vencimiento en índices 19-24 (posiciones 20-25): AAMMDD
-          const fechaAMMDD = barcdDigits.slice(19, 25);
-          const fecha1 = parseYYYYMMDDFromDebt(fechaAMMDD, 'BASIC') || fmtDate(paymentDate);
-          const dias2 = parseInt(barcdDigits.slice(35, 37), 10) || 0;
-          const fecha2 = addDaysYYYYMMDD(fecha1, dias2);
-          const imp1 = barcdDigits.slice(25, 35); // 26-35
-          const imp2 = barcdDigits.slice(37, 47); // 38-47
+    const codigoBarras = buildUnifiedBarcode({ channel: ch, userBarcode: opts.barcodeValue }); // 45-103
 
-          fecha1erVto = fecha1;
-          const rawSelected = selectRawImportByPaymentDate(
-            fechaPago,
-            fecha1,
-            imp1,
-            fecha2,
-            imp2,
-            fecha2,
-            imp2
-          );
-          importePagado = formatBarcodeAmountForUnified(rawSelected);
-        }
-      } else if (barcdDigits.startsWith('0447') || barcdDigits.startsWith('0444')) {
-        // Barcode 0444/0447: FECHA(6) + IMP1(7) + DIAS2(2) + IMP2(7) + DIAS3(2) + IMP3(7)
-        if (barcdDigits.length >= 44) {
-          // FECHA de vencimiento en Pos 14-19 (6 dígitos YYMMDD)
-          const fechaYYMMDD = barcdDigits.slice(13, 19);
-          const fecha1 = parseYYYYMMDDFromDebt(fechaYYMMDD, 'BASIC') || fmtDate(paymentDate);
-          const dias2 = parseInt(barcdDigits.slice(26, 28), 10) || 0;
-          const dias3 = parseInt(barcdDigits.slice(35, 37), 10) || 0;
-          const fecha2 = addDaysYYYYMMDD(fecha1, dias2);
-          const fecha3 = addDaysYYYYMMDD(fecha2, dias3);
-          const imp1 = barcdDigits.slice(19, 26); // 20-26
-          const imp2 = barcdDigits.slice(28, 35); // 29-35
-          const imp3 = barcdDigits.slice(37, 44); // 38-44
-
-          fecha1erVto = fecha1;
-          const rawSelected = selectRawImportByPaymentDate(
-            fechaPago,
-            fecha1,
-            imp1,
-            fecha2,
-            imp2,
-            fecha3,
-            imp3
-          );
-          importePagado = formatBarcodeAmountForUnified(rawSelected);
-        }
-      }
-      // Para canal efectivo, el comprobante va siempre en ceros
-      idComprobante = padLeft('', 20, '0');
-    } else if (ch === 'TI') {
-      // CANAL TI: El número de comprobante SIEMPRE va en ceros
+    // Número de comprobante / id de factura desde base de deuda
+    let idComprobante = padRight('', 20, ' '); // 104-123
+    if (ch === 'TI' || isCash(ch)) {
+      // TI y canales en efectivo siempre en ceros
       idComprobante = padLeft('', 20, '0');
     } else if (uploaded?.content) {
       const lines = uploaded.content.split(/\r?\n/).filter((l) => l.trim() !== '');
-      
+      let raw = '';
+      let mode: 'FULL' | 'BASIC' | null = null;
+
       const fullDetail = lines.find((l) => l.length === 280 && l[0] === '5');
       if (fullDetail) {
-        // FULL: 280 caracteres
-        // Pos 2-10: ID Usuario → 36-43 (8 dígitos)
-        const idUsuarioRaw = fullDetail.slice(1, 10).trim();
-        idUsuario = padLeft(onlyDigits(idUsuarioRaw).slice(-8), 8, '0');
-        
-        // Pos 21-40: ID Factura para concepto (usar primer dígito)
-        const conceptoRaw = fullDetail.slice(20, 21).trim();
-        idConcepto = onlyDigits(conceptoRaw).slice(0, 1) || '0';
-        
-        // Pos 21-40: ID Comprobante
-        const comprobante = fullDetail.slice(20, 40);
-        idComprobante = padRight(comprobante, 20, ' ');
-        
-        // Extraer las tres fechas y tres importes para seleccionar el correcto
-        const fecha1Raw = fullDetail.slice(41, 49).trim(); // Pos 42-49
-        const importe1Raw = fullDetail.slice(49, 60).trim(); // Pos 50-60
-        const fecha2Raw = fullDetail.slice(60, 68).trim(); // Pos 61-68
-        const importe2Raw = fullDetail.slice(68, 79).trim(); // Pos 69-79
-        const fecha3Raw = fullDetail.slice(79, 87).trim(); // Pos 80-87
-        const importe3Raw = fullDetail.slice(87, 98).trim(); // Pos 88-98
-        
-        // Seleccionar importe según la fecha de pago
-        importePagado = selectImportByPaymentDate(
-          fechaPago,
-          fecha1Raw,
-          importe1Raw,
-          fecha2Raw,
-          importe2Raw,
-          fecha3Raw,
-          importe3Raw
-        );
+        // FULL: posiciones 21-40 (1-based)
+        raw = fullDetail.slice(20, 40);
+        mode = 'FULL';
       } else {
         const basicDetail = lines.find((l) => l.length === 131 && l[0] === '1');
         if (basicDetail) {
-          // BÁSICO: 131 caracteres - Igual procesamiento que FULL
-          // Pos 9-17: ID Usuario → 36-43 (8 dígitos)
-          const idUsuarioRaw = basicDetail.slice(8, 17).trim();
-          idUsuario = padLeft(onlyDigits(idUsuarioRaw).slice(-8), 8, '0');
-          
-          // Pos 18-27: ID Factura/Comprobante (10 caracteres)
-          const comprobanteRaw = basicDetail.slice(17, 27);
-          idComprobante = padRight(comprobanteRaw, 20, ' ');
-          
-          // Pos 28: Concepto (primer dígito)
-          const conceptoRaw = basicDetail.slice(27, 28).trim();
-          idConcepto = onlyDigits(conceptoRaw).slice(0, 1) || '0';
-          
-          // Extraer las tres fechas y tres importes para seleccionar el correcto
-          // Basado en lo que buildUnifiedBarcode extrae para BÁSICO:
-          const fecha1Raw = basicDetail.slice(27, 33).trim(); // Pos 28-33 (YYMMDD)
-          const importe1Raw = basicDetail.slice(33, 45).trim(); // Pos 34-45
-          const fecha2Raw = basicDetail.slice(45, 51).trim(); // Pos 46-51 (YYMMDD)
-          const importe2Raw = basicDetail.slice(51, 63).trim(); // Pos 52-63
-          const fecha3Raw = basicDetail.slice(63, 69).trim(); // Pos 64-69 (YYMMDD)
-          const importe3Raw = basicDetail.slice(69, 81).trim(); // Pos 70-81
-          
-          // Seleccionar importe según la fecha de pago (igual que FULL)
-          importePagado = selectImportByPaymentDate(
-            fechaPago,
-            parseYYYYMMDDFromDebt(fecha1Raw, 'BASIC') || fecha1Raw,
-            importe1Raw,
-            parseYYYYMMDDFromDebt(fecha2Raw, 'BASIC') || fecha2Raw,
-            importe2Raw,
-            parseYYYYMMDDFromDebt(fecha3Raw, 'BASIC') || fecha3Raw,
-            importe3Raw
-          );
+          // BÁSICO: posiciones 1-5 (1-based)
+          raw = basicDetail.slice(0, 5);
+          mode = 'BASIC';
         }
       }
+
+      if (mode === 'FULL') {
+        idComprobante = padRight(raw.slice(0, 20), 20, ' ');
+      } else if (mode === 'BASIC') {
+        const digits = (raw || '').replace(/\D+/g, '').slice(-5); // últimos 5 dígitos
+        const last5 = padLeft(digits, 5, '0');
+        // 104-118 en ceros, 119-123 últimos 5 dígitos
+        idComprobante = padLeft('', 15, '0') + last5;
+      }
     }
-    
-    // ESPECIAL: Canales PCV y LKV
-    // Fecha acreditación = 19000101, Importe = CEROS, pero mantiene idUsuario
-    if (ch === 'PCV' || ch === 'LKV') {
-      fechaAcred = '19000101';
-      importePagado = padLeft('', 11, '0');
-      // idUsuario se mantiene del archivo o de valores anteriores
-    }
-    
-    const codigoBarras = buildUnifiedBarcode({ channel: ch, userBarcode: opts.barcodeValue }); // 45-103
     const canalCobro = padRight(ch, 3, ' '); // 124-126
-    
-    // Manejo de códigos y descripciones de rechazo para canales específicos
-    let codRechazo = padRight('', 3, ' '); // 127-129
-    let descRechazo = padRight('', 20, ' '); // 130-149
-    
-    const rechazosChannels = ['DDR', 'MCR', 'VSR', 'BPR'];
-    if (rechazosChannels.includes(ch)) {
-      // Código de rechazo (ej: 123)
-      codRechazo = '123';
-      // Descripción de rechazo: generar aleatoriamente
-      const rechazoDespList = ['FONDOS INSUFICIENTES', 'TARJ. INVALIDA'];
-      const selectedRechazo = rechazoDespList[Math.floor(Math.random() * rechazoDespList.length)];
-      descRechazo = padRight(selectedRechazo, 20, ' ');
-    }
+    const codRechazo = padRight('', 3, ' '); // 127-129
+    const descRechazo = padRight('', 20, ' '); // 130-149
 
     let cuotas = padRight('', 2, ' '); // 150-151
     let tarjeta = padRight('', 15, ' '); // 152-166
@@ -685,10 +543,7 @@ export default function RenditionsTab() {
     if (isCash(ch) && opts.barcodeValue) {
       const digits = onlyDigits(opts.barcodeValue);
       if (digits.startsWith('0448') && digits.length >= 19) {
-        // Barcode 0448: ID USUARIO/CLIENTE en posiciones 5-19 (índices 4-18 = 15 dígitos)
-        // Tomar ÚLTIMAS 9 de esos 15 (índices 10-18 = posiciones 11-19)
-        const idClienteExtRaw = digits.slice(10, 19);
-        idClienteExt = padLeft(idClienteExtRaw, 15, '0');
+        idClienteExt = digits.slice(4, 19); // posiciones 05-19 de la barra 0448, tal cual
       }
     }
     const nroTerminal = padRight('', 10, ' '); // 388-397
