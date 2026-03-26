@@ -5,8 +5,9 @@ import SiroParserTab from '@/components/SiroParserTab';
 import DebtBaseGeneratorTab from '@/components/DebtBaseGeneratorTab';
 import SiroLogo from '@/components/SiroLogo';
 import RenditionsTab from '@/components/RenditionsTab';
+import BarcodeGeneratorTab from '@/components/BarcodeGeneratorTab';
 
-type Tab = 'validator' | 'generator' | 'renditions';
+type Tab = 'validator' | 'generator' | 'renditions' | 'barcodes';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>('validator');
@@ -53,16 +54,20 @@ export default function Home() {
                   Archivos de Rendición
                 </button>
                 <button
-                  disabled
-                  className="px-3 py-2 text-sm font-medium text-[var(--siro-light-gray)] opacity-60 cursor-not-allowed"
+                    onClick={() => setActiveTab('barcodes')}
+                    className={`px-3 py-2 text-sm font-medium ${
+                      activeTab === 'barcodes'
+                        ? 'text-white border-b-2 border-white'
+                        : 'text-[var(--siro-light-gray)] hover:text-white'
+                    }`}
                 >
-                  Reportes
+                    Códigos de Barras
                 </button>
                 <button
                   disabled
                   className="px-3 py-2 text-sm font-medium text-[var(--siro-light-gray)] opacity-60 cursor-not-allowed"
                 >
-                  Configuración
+                    Reportes
                 </button>
               </nav>
             </div>
@@ -75,6 +80,7 @@ export default function Home() {
         {activeTab === 'validator' && <SiroParserTab />}
         {activeTab === 'generator' && <DebtBaseGeneratorTab />}
         {activeTab === 'renditions' && <RenditionsTab />}
+        {activeTab === 'barcodes' && <BarcodeGeneratorTab />}
       </main>
     </div>
   );

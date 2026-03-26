@@ -36,6 +36,22 @@ yarn-error.log*
 # vercel
 .vercel
 
+# netlify
+.netlify/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# turbopack / build cache
+.turbo/
+.cache/
+
+# eslint
+.eslintcache
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
